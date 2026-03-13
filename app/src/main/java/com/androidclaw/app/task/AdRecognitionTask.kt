@@ -40,7 +40,7 @@ class AdRecognitionTask : TaskScript {
     override val description = "全程录制 + 智能识别 + 自动裁剪保存广告片段"
     override var configuredAdDurationMs: Long = 0L
 
-    var targetVideoUri: android.net.Uri? = null
+    var targetVideoTasks: List<com.androidclaw.app.task.VideoTask> = emptyList()
     var recordResultCode: Int = 0
     var recordData: Intent? = null
 
@@ -49,9 +49,13 @@ class AdRecognitionTask : TaskScript {
         private const val AD_END_TIMEOUT_MS = 5_000L
         private const val PRE_ROLL_MS = 3_000L
         private const val POST_ROLL_MS = 3_000L
+        
+        // 特殊日志前缀，用于 UI 通讯
+        const val LOG_PREFIX_VIDEO_STATUS = "VIDEO_STATUS|"
+        const val LOG_PREFIX_VIDEO_RESULT = "VIDEO_RESULT|"
     }
 
-    private data class AdInterval(val startMs: Long, val endMs: Long)
+    private data class AdInterval(val videoId: String, val startMs: Long, val endMs: Long)
 
     override suspend fun execute(engine: AutomationEngine): Boolean {
         val context = getContext(engine) ?: run {
@@ -65,51 +69,47 @@ class AdRecognitionTask : TaskScript {
         val capturer = ScreenCapturer(context)
         var tmpFile: File? = null
         var recordStartWallMs = 0L
+        
         val adIntervals = mutableListOf<AdInterval>()
-        var currentAdStartMs = -1L
-        var lastMatchMs = -1L
-        var totalCaptures = 0
-        var nullFrameCount = 0
+        val finishedTasks = mutableSetOf<String>()
+        val currentAdStarts = mutableMapOf<String, Long>() // videoId -> startMs
+        val lastMatches = mutableMapOf<String, Long>()     // videoId -> lastMatchMs
+        val matchCounts = mutableMapOf<String, Int>()      // videoId -> count of successful matches
 
         try {
             LogManager.log("═══════════════════════════════════", LogManager.Level.INFO)
             LogManager.log("开始执行: $name", LogManager.Level.SUCCESS)
+            LogManager.log("目标包含 ${targetVideoTasks.size} 个视频", LogManager.Level.INFO)
             LogManager.log("═══════════════════════════════════", LogManager.Level.INFO)
 
-            // ===== 步骤1: 提取视频指纹 =====
-            LogManager.log("【步骤1】提取目标视频指纹...", LogManager.Level.INFO)
+            // ===== 步骤1: 批量提取视频指纹 =====
+            LogManager.log("【步骤1】批量提取目标视频指纹...", LogManager.Level.INFO)
             val fpManager = VideoFingerprintManager()
             
-            val uri = targetVideoUri
-            val count = if (uri != null) {
-                fpManager.extractFromUri(context, uri, 2)
-            } else {
-                fpManager.extractFromRawResource(context, R.raw.target_ad, 2)
+            targetVideoTasks.forEach { task ->
+                // 指纹提取频率适当增加，提高精度 (由 2 增加到 4 fps)
+                val count = fpManager.extractFromUri(context, task.id, task.uri, 4)
+                if (count > 0) {
+                    LogManager.log("指纹就绪: ${task.name} ($count 帧)", LogManager.Level.INFO)
+                }
             }
 
-            if (count == 0 || !fpManager.isLoaded) {
-                LogManager.log("指纹提取失败，任务终止", LogManager.Level.ERROR)
+            if (!fpManager.isLoaded) {
+                LogManager.log("所有指纹提取失败，任务终止", LogManager.Level.ERROR)
                 return false
             }
-            LogManager.log("指纹库就绪: $count 帧", LogManager.Level.SUCCESS)
 
             // ===== 步骤2: 创建唯一 MediaProjection，同时启动截图+录屏 =====
-            LogManager.log("【步骤2】启动屏幕监控 + 全程录屏...", LogManager.Level.INFO)
+            LogManager.log("【步骤2】启动服务...", LogManager.Level.INFO)
             val data = recordData ?: run {
                 LogManager.log("未提供录屏权限数据", LogManager.Level.ERROR)
                 return false
             }
 
-            // 创建唯一的 MediaProjection
-            val pm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE)
-                    as MediaProjectionManager
+            val pm = context.getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
             sharedProjection = pm.getMediaProjection(recordResultCode, data)
-            if (sharedProjection == null) {
-                LogManager.log("获取 MediaProjection 失败", LogManager.Level.ERROR)
-                return false
-            }
+            if (sharedProjection == null) return false
 
-            // 读取屏幕参数
             capturer.initScreenMetrics()
             val sw = capturer.screenWidth
             val sh = capturer.screenHeight
@@ -117,13 +117,8 @@ class AdRecognitionTask : TaskScript {
             val rw = if (sw % 2 == 0) sw else sw - 1
             val rh = if (sh % 2 == 0) sh else sh - 1
 
-            // VirtualDisplay #1: 截图 (通过 ScreenCapturer，共享 projection)
-            if (!capturer.startWithProjection(sharedProjection)) {
-                LogManager.log("截图启动失败", LogManager.Level.ERROR)
-                return false
-            }
+            if (!capturer.startWithProjection(sharedProjection)) return false
 
-            // VirtualDisplay #2: 全程录屏 (同一个 projection)
             tmpFile = createTempFile(context)
             recorder = createRecorder(context).apply {
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
@@ -136,96 +131,96 @@ class AdRecognitionTask : TaskScript {
                 prepare()
             }
 
-            recorderVd = sharedProjection.createVirtualDisplay(
-                "AdFullRecorder",
-                rw, rh, sd,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                recorder.surface, null, null
-            )
-
+            recorderVd = sharedProjection.createVirtualDisplay("AdFullRecorder", rw, rh, sd, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, recorder.surface, null, null)
             recorder.start()
             recordStartWallMs = System.currentTimeMillis()
 
-            LogManager.log("全程录制 + 截图监控 已同时启动", LogManager.Level.SUCCESS)
+            LogManager.log("录制已启动，正在监听多目标...", LogManager.Level.SUCCESS)
             engine.sleep(500)
 
             // ===== 步骤3: 实时监控循环 =====
-            LogManager.log("【步骤3】实时监控中，请切换到目标 App 刷广告...", LogManager.Level.INFO)
+            var totalCaptures = 0
 
             while (!engine.isCancelled) {
+                // 检查是否所有任务都已标记完成
+                if (finishedTasks.size == targetVideoTasks.size) {
+                    LogManager.log("🎉 队列中所有视频均已匹配完成 (已完成: ${finishedTasks.size}/${targetVideoTasks.size})", LogManager.Level.SUCCESS)
+                    break
+                }
+
                 val frame = capturer.captureFrame()
                 if (frame == null) {
-                    nullFrameCount++
-                    if (nullFrameCount % 20 == 0) {
-                        LogManager.log("⚠ 截图为空 (连续 $nullFrameCount 次)", LogManager.Level.WARN)
-                    }
                     engine.sleep(CAPTURE_INTERVAL_MS)
                     continue
                 }
 
-                nullFrameCount = 0
                 totalCaptures++
                 val nowMs = System.currentTimeMillis() - recordStartWallMs
-                val matchDistance = fpManager.matchScreenshot(frame)
+                
+                // 仅对尚未完成的任务进行匹配
+                val matchedVideoIds = fpManager.matchScreenshots(frame, finishedTasks)
                 frame.recycle()
 
-                val isMatch = matchDistance >= 0
+                // 处理匹配到的视频
+                matchedVideoIds.forEach { matchedVideoId ->
+                    lastMatches[matchedVideoId] = nowMs
+                    matchCounts[matchedVideoId] = (matchCounts[matchedVideoId] ?: 0) + 1
+                    
+                    if (!currentAdStarts.containsKey(matchedVideoId)) {
+                        currentAdStarts[matchedVideoId] = nowMs
+                        val task = targetVideoTasks.find { it.id == matchedVideoId }
+                        LogManager.log("🎯 发现疑似目标: ${task?.name} (ID: $matchedVideoId)", LogManager.Level.SUCCESS)
+                        LogManager.log("${LOG_PREFIX_VIDEO_STATUS}${matchedVideoId}|PROCESSING", LogManager.Level.INFO)
+                    }
+                }
 
-                if (isMatch) {
-                    lastMatchMs = nowMs
-                    if (currentAdStartMs < 0) {
-                        currentAdStartMs = nowMs
-                        LogManager.log("═══════════════════════════════════", LogManager.Level.SUCCESS)
-                        LogManager.log("🎯 发现目标广告! 距离=$matchDistance | 时间=${nowMs / 1000.0}s", LogManager.Level.SUCCESS)
-                        LogManager.log("═══════════════════════════════════", LogManager.Level.SUCCESS)
-                    } else if (totalCaptures % 10 == 0) {
-                        val dur = (nowMs - currentAdStartMs) / 1000.0
-                        LogManager.log("🔴 广告播放中 ${dur}s | 距离=$matchDistance", LogManager.Level.INFO)
-                    }
-                } else {
-                    if (currentAdStartMs >= 0 && lastMatchMs >= 0) {
-                        val silentMs = nowMs - lastMatchMs
-                        if (silentMs >= AD_END_TIMEOUT_MS) {
-                            val interval = AdInterval(currentAdStartMs, lastMatchMs)
-                            adIntervals.add(interval)
-                            val dur = (interval.endMs - interval.startMs) / 1000.0
-                            LogManager.log(
-                                "✅ 广告 #${adIntervals.size} 结束 (${dur}s)，已标记时间戳待裁剪",
-                                LogManager.Level.SUCCESS
-                            )
-                            currentAdStartMs = -1L
-                            lastMatchMs = -1L
+                // 检查活跃中的视频是否播放结束 (超时未匹配)
+                val activeVideoIds = currentAdStarts.keys.toList()
+                activeVideoIds.forEach { videoId ->
+                    val start = currentAdStarts[videoId] ?: 0L
+                    val lastMatch = lastMatches[videoId] ?: 0L
+                    val idleTime = nowMs - lastMatch
+                    val matchDuration = lastMatch - start
+                    val count = matchCounts[videoId] ?: 0
+                    
+                    if (idleTime >= AD_END_TIMEOUT_MS) {
+                        // 逻辑修正：要求时长 > 3 秒且在该时段内有超过 4 次以上匹配成功才算
+                        if (matchDuration >= 3000L && count >= 4) {
+                            adIntervals.add(AdInterval(videoId, start, lastMatch))
+                            finishedTasks.add(videoId)
+                            currentAdStarts.remove(videoId)
+                            lastMatches.remove(videoId)
+                            matchCounts.remove(videoId)
+                            
+                            val task = targetVideoTasks.find { it.id == videoId }
+                            LogManager.log("✅ 确认捕获广告: ${task?.name} (持续: ${matchDuration / 1000.0}s, 有效匹配: $count)", LogManager.Level.SUCCESS)
+                            LogManager.log("${LOG_PREFIX_VIDEO_STATUS}${videoId}|COMPLETED", LogManager.Level.INFO)
+                        } else {
+                            // 匹配质量太低被判定为误报
+                            currentAdStarts.remove(videoId)
+                            lastMatches.remove(videoId)
+                            matchCounts.remove(videoId)
+                            LogManager.log("⚠️ 判定为误报 (${matchDuration}ms, $count 帧)，重置状态", LogManager.Level.WARN)
+                            LogManager.log("${LOG_PREFIX_VIDEO_STATUS}${videoId}|WAITING", LogManager.Level.INFO)
                         }
-                    } else if (totalCaptures % 40 == 0) {
-                        val dist = fpManager.getLastMinDistance()
-                        LogManager.log(
-                            "👀 监控中 | 最小距离=$dist / 阈值${fpManager.matchThreshold} | 截图 $totalCaptures 帧",
-                            LogManager.Level.INFO
-                        )
                     }
+                }
+
+                if (totalCaptures % 20 == 0) {
+                    val remaining = targetVideoTasks.count { !finishedTasks.contains(it.id) }
+                    val dist = fpManager.getLastMinDistance()
+                    LogManager.log("监控中... [剩余目标: $remaining/${targetVideoTasks.size}] [当前最小距离: $dist]", LogManager.Level.INFO)
                 }
 
                 engine.sleep(CAPTURE_INTERVAL_MS)
             }
 
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            LogManager.log("任务被用户取消，准备保存已识别的广告...", LogManager.Level.INFO)
         } catch (e: Exception) {
             LogManager.log("❌ 任务异常: ${e.message}", LogManager.Level.ERROR)
         } finally {
-            // ===== 用 NonCancellable 确保即使协程被取消也能完成裁剪 =====
             withContext(kotlinx.coroutines.NonCancellable) {
-                // 记录最后一段未结束的广告
-                if (currentAdStartMs >= 0) {
-                    val endMs = System.currentTimeMillis() - recordStartWallMs
-                    adIntervals.add(AdInterval(currentAdStartMs, endMs))
-                    LogManager.log("记录最后一段广告 (任务停止时仍在播放)", LogManager.Level.INFO)
-                }
-
-                // 停止截图
+                // 扫尾工作
                 capturer.stop()
-
-                // 停止录制 (必须先停止才能读取文件)
                 try { recorder?.stop() } catch (_: Exception) {}
                 try { recorder?.release() } catch (_: Exception) {}
                 recorder = null
@@ -234,45 +229,35 @@ class AdRecognitionTask : TaskScript {
                 try { sharedProjection?.stop() } catch (_: Exception) {}
                 sharedProjection = null
 
-                LogManager.log("录制已停止", LogManager.Level.INFO)
-
                 // ===== 步骤4: 批量裁剪 =====
                 if (adIntervals.isNotEmpty() && tmpFile != null && tmpFile.exists()) {
-                    LogManager.log("【步骤4】裁剪 ${adIntervals.size} 段广告...", LogManager.Level.INFO)
-                    var saved = 0
+                    LogManager.log("【步骤4】开始批量裁剪视频片段...", LogManager.Level.INFO)
                     withContext(Dispatchers.IO) {
                         val outDir = context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)
                         if (outDir?.exists() == false) outDir.mkdirs()
 
-                        adIntervals.forEachIndexed { idx, interval ->
+                        adIntervals.forEach { interval ->
+                            val task = targetVideoTasks.find { it.id == interval.videoId }
                             val trimStart = (interval.startMs - PRE_ROLL_MS).coerceAtLeast(0)
                             val trimEnd = interval.endMs + POST_ROLL_MS
-                            val sdf = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
-                            val outName = "AdProof_${sdf.format(Date())}_${idx + 1}of${adIntervals.size}.mp4"
+                            val outName = "Ad_${task?.name?.substringBeforeLast('.') ?: "clip"}_${System.currentTimeMillis()}.mp4"
                             val outFile = File(outDir, outName)
 
-                            LogManager.log("裁剪 #${idx + 1}: [${trimStart / 1000.0}s → ${trimEnd / 1000.0}s]", LogManager.Level.INFO)
                             if (VideoTrimmer.trim(tmpFile.absolutePath, outFile.absolutePath, trimStart, trimEnd)) {
-                                saved++
-                                LogManager.log("✅ 已保存: $outName", LogManager.Level.SUCCESS)
-                            } else {
-                                LogManager.log("❌ 裁剪失败 #${idx + 1}", LogManager.Level.ERROR)
+                                LogManager.log("🎬 已保存裁剪片段: $outName", LogManager.Level.SUCCESS)
+                                LogManager.log("${LOG_PREFIX_VIDEO_RESULT}${interval.videoId}|${outFile.absolutePath}", LogManager.Level.INFO)
                             }
                         }
                     }
                     try { tmpFile.delete() } catch (_: Exception) {}
-
-                    LogManager.log("═══════════════════════════════════", LogManager.Level.SUCCESS)
-                    LogManager.log("✅ 共发现 ${adIntervals.size} 次广告，保存 $saved 段录屏", LogManager.Level.SUCCESS)
-                    LogManager.log("═══════════════════════════════════", LogManager.Level.SUCCESS)
                 } else {
                     try { tmpFile?.delete() } catch (_: Exception) {}
-                    LogManager.log("本次任务未检测到目标广告", LogManager.Level.WARN)
+                    LogManager.log("未产生可裁剪片段", LogManager.Level.WARN)
                 }
             }
         }
 
-        return adIntervals.isNotEmpty()
+        return finishedTasks.isNotEmpty()
     }
 
     private fun createTempFile(context: Context): File {

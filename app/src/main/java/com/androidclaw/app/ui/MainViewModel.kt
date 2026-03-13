@@ -40,15 +40,35 @@ class MainViewModel : ViewModel() {
         _videoTasks.postValue(current)
     }
 
+    fun removeVideoTask(taskId: String) {
+        val current = _videoTasks.value?.filter { it.id != taskId } ?: emptyList()
+        _videoTasks.postValue(current)
+    }
+
     fun setCurrentVideoTask(taskId: String?) {
         _currentVideoTaskId.postValue(taskId)
     }
 
-    fun updateVideoTaskStatus(taskId: String, status: com.androidclaw.app.task.VideoTask.Status) {
-        val current = _videoTasks.value?.map {
-            if (it.id == taskId) it.copy(status = status) else it
-        } ?: emptyList()
-        _videoTasks.postValue(current)
+    fun updateVideoTaskStatus(id: String, status: com.androidclaw.app.task.VideoTask.Status) {
+        val list = _videoTasks.value?.toMutableList() ?: return
+        val index = list.indexOfFirst { it.id == id }
+        if (index != -1) {
+            list[index] = list[index].copy(status = status)
+            _videoTasks.postValue(list)
+        }
+    }
+
+    fun updateVideoTaskResult(id: String, resultPath: String) {
+        val list = _videoTasks.value?.toMutableList() ?: return
+        val index = list.indexOfFirst { it.id == id }
+        if (index != -1) {
+            list[index] = list[index].copy(status = com.androidclaw.app.task.VideoTask.Status.COMPLETED, resultPath = resultPath)
+            _videoTasks.postValue(list)
+        }
+    }
+
+    fun getWaitingVideoTasks(): List<com.androidclaw.app.task.VideoTask> {
+        return _videoTasks.value?.filter { it.status == com.androidclaw.app.task.VideoTask.Status.WAITING } ?: emptyList()
     }
 
     fun getNextWaitingTask(): com.androidclaw.app.task.VideoTask? {

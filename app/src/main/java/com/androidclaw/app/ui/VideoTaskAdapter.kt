@@ -13,7 +13,9 @@ import com.androidclaw.app.task.VideoTask
 /**
  * 视频任务队列适配器
  */
-class VideoTaskAdapter : ListAdapter<VideoTask, VideoTaskAdapter.VideoTaskViewHolder>(DiffCallback()) {
+class VideoTaskAdapter(
+    private val onItemClick: ((VideoTask) -> Unit)? = null
+) : ListAdapter<VideoTask, VideoTaskAdapter.VideoTaskViewHolder>(DiffCallback()) {
 
     override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): VideoTaskViewHolder {
         val view = LayoutInflater.from(parent.context).inflate(R.layout.item_video_task, parent, false)
@@ -21,7 +23,7 @@ class VideoTaskAdapter : ListAdapter<VideoTask, VideoTaskAdapter.VideoTaskViewHo
     }
 
     override fun onBindViewHolder(holder: VideoTaskViewHolder, position: Int) {
-        holder.bind(getItem(position))
+        holder.bind(getItem(position), onItemClick)
     }
 
     class VideoTaskViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -29,9 +31,20 @@ class VideoTaskAdapter : ListAdapter<VideoTask, VideoTaskAdapter.VideoTaskViewHo
         private val tvPath: TextView = itemView.findViewById(R.id.tvVideoPath)
         private val tvStatus: TextView = itemView.findViewById(R.id.tvVideoStatus)
 
-        fun bind(task: VideoTask) {
+        fun bind(task: VideoTask, onItemClick: ((VideoTask) -> Unit)?) {
             tvName.text = task.name
-            tvPath.text = task.uri.toString()
+            
+            if (task.status == VideoTask.Status.COMPLETED && task.resultPath != null) {
+                tvPath.text = "点击查看结果: ${task.resultPath}"
+                tvPath.setTextColor(itemView.context.getColor(R.color.accent))
+            } else {
+                tvPath.text = task.uri.toString()
+                tvPath.setTextColor(itemView.context.getColor(R.color.text_secondary))
+            }
+
+            itemView.setOnClickListener {
+                onItemClick?.invoke(task)
+            }
 
             when (task.status) {
                 VideoTask.Status.WAITING -> {

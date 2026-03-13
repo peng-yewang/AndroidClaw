@@ -12,17 +12,17 @@ import com.androidclaw.app.log.LogManager
  */
 class VideoFingerprintManager {
 
-    /** 指纹库 —— 目标视频每帧的 dHash 值 */
-    private val fingerprints = mutableListOf<Long>()
+    /** 指纹库 —— 目标视频 ID 到 dHash 值的映射 */
+    private val fingerprintGroups = mutableMapOf<String, List<Long>>()
 
-    /** 匹配阈值: 汉明距离 ≤ 此值认为匹配 */
-    var matchThreshold = 18
+    /** 匹配阈值: 汉明距离 ≤ 此值认为匹配 (推荐值 5-10 用于广告监测) */
+    var matchThreshold = 8
 
     /** 指纹库是否已加载 */
-    val isLoaded: Boolean get() = fingerprints.isNotEmpty()
+    val isLoaded: Boolean get() = fingerprintGroups.isNotEmpty()
 
-    /** 指纹数量 */
-    val fingerprintCount: Int get() = fingerprints.size
+    /** 指纹组数量 */
+    val groupCount: Int get() = fingerprintGroups.size
 
     /** 上次匹配计算的最小汉明距离 (调试用) */
     private var lastMinDistance = -1
@@ -31,14 +31,10 @@ class VideoFingerprintManager {
     fun getLastMinDistance(): Int = lastMinDistance
 
     /**
-     * 从 URI 资源中提取视频指纹
-     * @param context  上下文
-     * @param uri      视频 URI
-     * @param fps      每秒提取帧数 (默认 2)
-     * @return 提取的指纹数量
+     * 从 URI 资源中提取视频指纹并存入指定 ID
      */
-    fun extractFromUri(context: Context, uri: android.net.Uri, fps: Int = 2): Int {
-        fingerprints.clear()
+    fun extractFromUri(context: Context, videoId: String, uri: android.net.Uri, fps: Int = 2): Int {
+        val group = mutableListOf<Long>()
 
         val retriever = MediaMetadataRetriever()
         return try {
@@ -50,12 +46,9 @@ class VideoFingerprintManager {
             )?.toLongOrNull()?.times(1000) ?: 0L
 
             if (durationUs <= 0) {
-                LogManager.log("无法获取视频时长", LogManager.Level.ERROR)
+                LogManager.log("无法获取视频时长: $videoId", LogManager.Level.ERROR)
                 return 0
             }
-
-            val durationSec = durationUs / 1_000_000.0
-            LogManager.log("视频时长: ${"%.1f".format(durationSec)} 秒", LogManager.Level.INFO)
 
             // 按 fps 间隔抽帧
             val intervalUs = 1_000_000L / fps
@@ -69,20 +62,23 @@ class VideoFingerprintManager {
                 )
                 if (frame != null) {
                     val hash = computeDHash(frame)
-                    fingerprints.add(hash)
+                    group.add(hash)
                     frameCount++
                     frame.recycle()
                 }
                 timeUs += intervalUs
             }
 
+            if (group.isNotEmpty()) {
+                fingerprintGroups[videoId] = group
+            }
             LogManager.log(
-                "指纹提取完成, 共 $frameCount 帧",
+                "ID: $videoId 指纹提取完成, 共 $frameCount 帧",
                 LogManager.Level.SUCCESS
             )
             frameCount
         } catch (e: Exception) {
-            LogManager.log("指纹提取失败: ${e.message}", LogManager.Level.ERROR)
+            LogManager.log("ID: $videoId 指纹提取失败: ${e.message}", LogManager.Level.ERROR)
             0
         } finally {
             retriever.release()
@@ -91,13 +87,9 @@ class VideoFingerprintManager {
 
     /**
      * 从 raw 资源中提取视频指纹
-     * @param context  上下文
-     * @param rawResId raw 资源 ID (如 R.raw.target_ad)
-     * @param fps      每秒提取帧数 (默认 2)
-     * @return 提取的指纹数量
      */
-    fun extractFromRawResource(context: Context, rawResId: Int, fps: Int = 2): Int {
-        fingerprints.clear()
+    fun extractFromRawResource(context: Context, videoId: String, rawResId: Int, fps: Int = 2): Int {
+        val group = mutableListOf<Long>()
 
         val retriever = MediaMetadataRetriever()
         return try {
@@ -111,13 +103,7 @@ class VideoFingerprintManager {
                 MediaMetadataRetriever.METADATA_KEY_DURATION
             )?.toLongOrNull()?.times(1000) ?: 0L
 
-            if (durationUs <= 0) {
-                LogManager.log("无法获取视频时长", LogManager.Level.ERROR)
-                return 0
-            }
-
-            val durationSec = durationUs / 1_000_000.0
-            LogManager.log("视频时长: ${"%.1f".format(durationSec)} 秒", LogManager.Level.INFO)
+            if (durationUs <= 0) return 0
 
             // 按 fps 间隔抽帧
             val intervalUs = 1_000_000L / fps
@@ -131,20 +117,19 @@ class VideoFingerprintManager {
                 )
                 if (frame != null) {
                     val hash = computeDHash(frame)
-                    fingerprints.add(hash)
+                    group.add(hash)
                     frameCount++
                     frame.recycle()
                 }
                 timeUs += intervalUs
             }
 
-            LogManager.log(
-                "指纹提取完成, 共 $frameCount 帧",
-                LogManager.Level.SUCCESS
-            )
+            if (group.isNotEmpty()) {
+                fingerprintGroups[videoId] = group
+            }
             frameCount
         } catch (e: Exception) {
-            LogManager.log("指纹提取失败: ${e.message}", LogManager.Level.ERROR)
+            LogManager.log("ID: $videoId 指纹提取失败: ${e.message}", LogManager.Level.ERROR)
             0
         } finally {
             retriever.release()
@@ -152,27 +137,41 @@ class VideoFingerprintManager {
     }
 
     /**
-     * 判断截屏是否匹配目标视频
-     * @param screenshot 当前截屏 Bitmap
-     * @return 匹配则返回最小汉明距离, 不匹配返回 -1
+     * 匹配截屏，返回匹配成功的视频 ID 列表
+     * @param screenshot 当前截屏
+     * @param excludeIds 需要排除的 ID (已完成的任务)
+     * @return 匹配成功的 ID 列表 (按匹配程度排序)
      */
-    fun matchScreenshot(screenshot: Bitmap): Int {
-        if (fingerprints.isEmpty()) return -1
+    fun matchScreenshots(screenshot: Bitmap, excludeIds: Set<String> = emptySet()): List<String> {
+        if (fingerprintGroups.isEmpty()) return emptyList()
 
         val screenshotHash = computeDHash(screenshot)
-        var minDistance = Int.MAX_VALUE
+        if (screenshotHash == 0L) return emptyList()
+        val matches = mutableListOf<Pair<String, Int>>()
+        var absoluteMinDistance = Int.MAX_VALUE
 
-        for (fp in fingerprints) {
-            val distance = hammingDistance(screenshotHash, fp)
-            if (distance < minDistance) {
-                minDistance = distance
+        for ((id, group) in fingerprintGroups) {
+            if (excludeIds.contains(id)) continue
+
+            var localMinDistance = Int.MAX_VALUE
+            for (fp in group) {
+                val distance = hammingDistance(screenshotHash, fp)
+                if (distance < localMinDistance) {
+                    localMinDistance = distance
+                }
+                if (localMinDistance <= 5) break 
             }
-            // 提前终止: 已经非常匹配
-            if (minDistance <= 5) break
+
+            if (localMinDistance <= matchThreshold) {
+                matches.add(id to localMinDistance)
+            }
+            if (localMinDistance < absoluteMinDistance) {
+                absoluteMinDistance = localMinDistance
+            }
         }
 
-        lastMinDistance = minDistance
-        return if (minDistance <= matchThreshold) minDistance else -1
+        lastMinDistance = absoluteMinDistance
+        return matches.sortedBy { it.second }.map { it.first }
     }
 
     /**
@@ -232,6 +231,6 @@ class VideoFingerprintManager {
      * 清空指纹库
      */
     fun clear() {
-        fingerprints.clear()
+        fingerprintGroups.clear()
     }
 }

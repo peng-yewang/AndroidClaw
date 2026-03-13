@@ -9,7 +9,9 @@ import android.provider.Settings
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.ViewModelProvider
+import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import com.androidclaw.app.R
 import com.androidclaw.app.databinding.ActivityMainBinding
 import com.androidclaw.app.log.LogManager
@@ -66,6 +68,26 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val logListener: (TaskLog) -> Unit = { log ->
+        val content = log.message
+        if (content.startsWith(com.androidclaw.app.task.AdRecognitionTask.LOG_PREFIX_VIDEO_STATUS)) {
+            val parts = content.removePrefix(com.androidclaw.app.task.AdRecognitionTask.LOG_PREFIX_VIDEO_STATUS).split("|")
+            if (parts.size == 2) {
+                val videoId = parts[0]
+                val statusStr = parts[1]
+                val status = try { com.androidclaw.app.task.VideoTask.Status.valueOf(statusStr) } catch (e: Exception) { null }
+                status?.let {
+                    runOnUiThread { viewModel.updateVideoTaskStatus(videoId, it) }
+                }
+            }
+        } else if (content.startsWith(com.androidclaw.app.task.AdRecognitionTask.LOG_PREFIX_VIDEO_RESULT)) {
+            val parts = content.removePrefix(com.androidclaw.app.task.AdRecognitionTask.LOG_PREFIX_VIDEO_RESULT).split("|")
+            if (parts.size == 2) {
+                val videoId = parts[0]
+                val resultPath = parts[1]
+                runOnUiThread { viewModel.updateVideoTaskResult(videoId, resultPath) }
+            }
+        }
+        
         runOnUiThread {
             logAdapter.addLog(log)
             binding.rvLogs.scrollToPosition(logAdapter.itemCount - 1)
@@ -97,8 +119,36 @@ class MainActivity : AppCompatActivity() {
         binding.rvLogs.adapter = logAdapter
 
         // 视频任务队列
-        videoTaskAdapter = VideoTaskAdapter()
+        videoTaskAdapter = VideoTaskAdapter { task ->
+            if (task.status == com.androidclaw.app.task.VideoTask.Status.COMPLETED && task.resultPath != null) {
+                openVideo(task.resultPath!!)
+            }
+        }
         binding.rvVideoTasks.adapter = videoTaskAdapter
+        
+        // 滑动删除逻辑
+        val swipeCallback = object : ItemTouchHelper.SimpleCallback(0, ItemTouchHelper.LEFT) {
+            override fun onMove(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder, target: RecyclerView.ViewHolder): Boolean = false
+            override fun onSwiped(viewHolder: RecyclerView.ViewHolder, direction: Int) {
+                val position = viewHolder.adapterPosition
+                val task = videoTaskAdapter.currentList[position]
+                
+                // 弹出确认对话框
+                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("确认删除")
+                    .setMessage("确定要删除任务 \"${task.name}\" 吗？")
+                    .setPositiveButton("删除") { _, _ ->
+                        viewModel.removeVideoTask(task.id)
+                        Toast.makeText(this@MainActivity, "任务已删除", Toast.LENGTH_SHORT).show()
+                    }
+                    .setNegativeButton("取消") { _, _ ->
+                        videoTaskAdapter.notifyItemChanged(position)
+                    }
+                    .setCancelable(false)
+                    .show()
+            }
+        }
+        ItemTouchHelper(swipeCallback).attachToRecyclerView(binding.rvVideoTasks)
 
         // 加载已有日志
         LogManager.getAllLogs().forEach { logAdapter.addLog(it) }
@@ -123,7 +173,9 @@ class MainActivity : AppCompatActivity() {
 
         viewModel.taskState.observe(this) { state ->
             updateTaskUI(state)
-            handleAutomaticQueue(state)
+            if (state == TaskManager.TaskState.COMPLETED) {
+                Toast.makeText(this, "🎉 所有广告识别任务已全部完成！", Toast.LENGTH_LONG).show()
+            }
         }
 
         viewModel.taskMessage.observe(this) { message ->
@@ -139,22 +191,6 @@ class MainActivity : AppCompatActivity() {
         taskManager.onStateChanged = { state, message ->
             runOnUiThread {
                 viewModel.updateTaskState(state, message)
-                
-                // 更新当前视频任务状态
-                viewModel.currentVideoTaskId.value?.let { id ->
-                    val videoStatus = when (state) {
-                        TaskManager.TaskState.RUNNING -> com.androidclaw.app.task.VideoTask.Status.PROCESSING
-                        TaskManager.TaskState.COMPLETED -> com.androidclaw.app.task.VideoTask.Status.COMPLETED
-                        TaskManager.TaskState.FAILED -> com.androidclaw.app.task.VideoTask.Status.FAILED
-                        TaskManager.TaskState.CANCELLED -> com.androidclaw.app.task.VideoTask.Status.WAITING
-                        else -> null
-                    }
-                    videoStatus?.let { viewModel.updateVideoTaskStatus(id, it) }
-                    
-                    if (state != TaskManager.TaskState.RUNNING) {
-                        viewModel.setCurrentVideoTask(null)
-                    }
-                }
             }
         }
     }
@@ -178,7 +214,6 @@ class MainActivity : AppCompatActivity() {
         // 停止任务
         binding.btnStopTask.setOnClickListener {
             taskManager.cancelTask()
-            viewModel.setCurrentVideoTask(null)
         }
 
         // 清除日志
@@ -206,29 +241,23 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val nextTask = viewModel.getNextWaitingTask()
-        if (nextTask == null) {
+        val waitingTasks = viewModel.getWaitingVideoTasks()
+        if (waitingTasks.isEmpty()) {
             Toast.makeText(this, "队列中没有等待的任务", Toast.LENGTH_SHORT).show()
             return
         }
 
         val adTask = com.androidclaw.app.task.AdRecognitionTask()
-        adTask.targetVideoUri = nextTask.uri
+        adTask.targetVideoTasks = waitingTasks
         
         pendingTask = adTask
-        viewModel.setCurrentVideoTask(nextTask.id)
         
         val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
         screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
     private fun handleAutomaticQueue(state: TaskManager.TaskState) {
-        // 如果任务完成或失败，且之前正在处理视频任务，则自动开始下一个
-        if (state == TaskManager.TaskState.COMPLETED || state == TaskManager.TaskState.FAILED) {
-            handler.postDelayed({
-                startNextVideoTask()
-            }, 1500) // 延迟一点点，让 UI 有个反馈
-        }
+        // 多任务并行化后，不再需要手动处理队列衔接
     }
 
     private fun getFileName(uri: android.net.Uri): String? {
@@ -316,6 +345,30 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         handler.removeCallbacks(serviceCheckRunnable)
+    }
+
+    private fun openVideo(path: String) {
+        val file = java.io.File(path)
+        if (!file.exists()) {
+            Toast.makeText(this, "文件不存在: $path", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "${packageName}.fileprovider",
+                file
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(this, "无法打开视频: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onDestroy() {
