@@ -247,13 +247,22 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val adTask = com.androidclaw.app.task.AdRecognitionTask()
-        adTask.targetVideoTasks = waitingTasks
-        
-        pendingTask = adTask
-        
-        val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-        screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+        // 🟢 动态方案验证：提供算法模式选择对话框
+        val options = arrayOf("PHash (感知哈希 - 省电极速)", "MobileNetV3 (轻量AI - 语义特征)")
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("选择识别算法方案")
+            .setItems(options) { _, which ->
+                val adTask = com.androidclaw.app.task.AdRecognitionTask()
+                adTask.targetVideoTasks = waitingTasks
+                adTask.algorithmType = which // 0->PHash, 1->MobileNetV3
+                
+                pendingTask = adTask
+                
+                val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+                screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 
     private fun handleAutomaticQueue(state: TaskManager.TaskState) {

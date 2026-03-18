@@ -43,6 +43,9 @@ class AdRecognitionTask : TaskScript {
     var targetVideoTasks: List<com.androidclaw.app.task.VideoTask> = emptyList()
     var recordResultCode: Int = 0
     var recordData: Intent? = null
+    
+    /** 算法类型：0 -> PHash (默认), 1 -> MobileNetV3 */
+    var algorithmType: Int = 0
 
     companion object {
         private const val CAPTURE_INTERVAL_MS = 500L
@@ -84,17 +87,24 @@ class AdRecognitionTask : TaskScript {
 
             // ===== 步骤1: 批量提取视频指纹 =====
             LogManager.log("【步骤1】批量提取目标视频指纹...", LogManager.Level.INFO)
-            val fpManager = VideoFingerprintManager()
-            
+            val fpManager = if (algorithmType == 0) VideoFingerprintManager() else null
+            val aiManager = if (algorithmType == 1) com.androidclaw.app.engine.MobileNetFingerprintManager(context) else null
+            val captureInterval = if (algorithmType == 1) 1000L else CAPTURE_INTERVAL_MS
+
             targetVideoTasks.forEach { task ->
-                // 指纹提取频率适当增加，提高精度 (由 2 增加到 4 fps)，并开启 Debug 帧保存
-                val count = fpManager.extractFromUri(context, task.id, task.uri, 4, true)
+                val count = if (algorithmType == 0) {
+                    fpManager?.extractFromUri(context, task.id, task.uri, 4, true) ?: 0
+                } else {
+                    aiManager?.extractFromUri(context, task.id, task.uri, 1) ?: 0 // AI 每一秒抽1帧用于对轨即可
+                }
+
                 if (count > 0) {
-                    LogManager.log("指纹就绪: ${task.name} ($count 帧)", LogManager.Level.INFO)
+                    LogManager.log("${if (algorithmType == 1) "AI" else "PHash"}特征就绪: ${task.name} ($count 帧)", LogManager.Level.INFO)
                 }
             }
 
-            if (!fpManager.isLoaded) {
+            val isLoaded = (fpManager?.isLoaded == true) || (aiManager?.isLoaded == true)
+            if (!isLoaded) {
                 LogManager.log("所有指纹提取失败，任务终止", LogManager.Level.ERROR)
                 return false
             }
@@ -158,7 +168,11 @@ class AdRecognitionTask : TaskScript {
                 val nowMs = System.currentTimeMillis() - recordStartWallMs
                 
                 // 仅对尚未完成的任务进行匹配
-                val matchedVideoIds = fpManager.matchScreenshots(frame, finishedTasks)
+                val matchedVideoIds = if (algorithmType == 0) {
+                    fpManager?.matchScreenshots(frame, finishedTasks) ?: emptyList()
+                } else {
+                    aiManager?.matchScreenshots(frame, finishedTasks) ?: emptyList()
+                }
 
                 // 处理匹配到的视频
                 matchedVideoIds.forEach { matchedVideoId ->
@@ -222,12 +236,12 @@ class AdRecognitionTask : TaskScript {
 
                 if (totalCaptures % 20 == 0) {
                     val remaining = targetVideoTasks.count { !finishedTasks.contains(it.id) }
-                    val dist = fpManager.getLastMinDistance()
-                    LogManager.log("监控中... [剩余目标: $remaining/${targetVideoTasks.size}] [当前最小距离: $dist]", LogManager.Level.INFO)
+                    val dist = fpManager?.getLastMinDistance() ?: -1
+                    LogManager.log("监控中... [当前:${if (algorithmType == 1) "AI" else "PHash"}] [剩余目标: $remaining/${targetVideoTasks.size}]", LogManager.Level.INFO)
                 }
 
                 frame.recycle() // 释放当前帧内存，防止 OOM
-                engine.sleep(CAPTURE_INTERVAL_MS)
+                engine.sleep(captureInterval)
             }
 
         } catch (e: Exception) {

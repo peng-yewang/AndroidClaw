@@ -37,6 +37,11 @@ android {
     buildFeatures {
         viewBinding = true
     }
+
+    // 🔴 保证 tflite 模型不被 AAPT 压缩，否则 MappedByteBuffer 读取报错
+    aaptOptions {
+        noCompress("tflite")
+    }
 }
 
 dependencies {
@@ -48,4 +53,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.7.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // 🌟 TensorFlow Lite 核心
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
 }
