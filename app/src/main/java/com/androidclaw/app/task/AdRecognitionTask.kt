@@ -87,8 +87,8 @@ class AdRecognitionTask : TaskScript {
             val fpManager = VideoFingerprintManager()
             
             targetVideoTasks.forEach { task ->
-                // 指纹提取频率适当增加，提高精度 (由 2 增加到 4 fps)
-                val count = fpManager.extractFromUri(context, task.id, task.uri, 4)
+                // 指纹提取频率适当增加，提高精度 (由 2 增加到 4 fps)，并开启 Debug 帧保存
+                val count = fpManager.extractFromUri(context, task.id, task.uri, 4, true)
                 if (count > 0) {
                     LogManager.log("指纹就绪: ${task.name} ($count 帧)", LogManager.Level.INFO)
                 }
@@ -159,13 +159,27 @@ class AdRecognitionTask : TaskScript {
                 
                 // 仅对尚未完成的任务进行匹配
                 val matchedVideoIds = fpManager.matchScreenshots(frame, finishedTasks)
-                frame.recycle()
 
                 // 处理匹配到的视频
                 matchedVideoIds.forEach { matchedVideoId ->
                     lastMatches[matchedVideoId] = nowMs
                     matchCounts[matchedVideoId] = (matchCounts[matchedVideoId] ?: 0) + 1
                     
+                    // 🔴 调试功能：当匹配到时，将这一帧保存下来单独存放归档
+                    try {
+                        val debugDir = context.getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES)
+                        val taskDir = java.io.File(debugDir, "Debug_Matched_${matchedVideoId}")
+                        if (!taskDir.exists()) taskDir.mkdirs()
+                        val frameFile = java.io.File(taskDir, "Matched_${nowMs}ms.jpg")
+                        val out = java.io.FileOutputStream(frameFile)
+                        // frame 即为当前比对中使用的 Bitmap
+                        frame.compress(android.graphics.Bitmap.CompressFormat.JPEG, 85, out)
+                        out.flush()
+                        out.close()
+                    } catch (e: Exception) {
+                        LogManager.log("📸 保存命中帧失败: ${e.message}", LogManager.Level.WARN)
+                    }
+
                     if (!currentAdStarts.containsKey(matchedVideoId)) {
                         currentAdStarts[matchedVideoId] = nowMs
                         val task = targetVideoTasks.find { it.id == matchedVideoId }
@@ -212,6 +226,7 @@ class AdRecognitionTask : TaskScript {
                     LogManager.log("监控中... [剩余目标: $remaining/${targetVideoTasks.size}] [当前最小距离: $dist]", LogManager.Level.INFO)
                 }
 
+                frame.recycle() // 释放当前帧内存，防止 OOM
                 engine.sleep(CAPTURE_INTERVAL_MS)
             }
 
