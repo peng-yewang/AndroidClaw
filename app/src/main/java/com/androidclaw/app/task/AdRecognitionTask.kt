@@ -47,6 +47,9 @@ class AdRecognitionTask : TaskScript {
     /** 算法类型：0 -> PHash (默认), 1 -> MobileNetV3 */
     var algorithmType: Int = 0
 
+    /** 是否开启横屏 90 度自动旋转补偿 */
+    var enableRotationMatch: Boolean = false
+
     companion object {
         private const val CAPTURE_INTERVAL_MS = 500L
         private const val AD_END_TIMEOUT_MS = 5_000L
@@ -90,6 +93,10 @@ class AdRecognitionTask : TaskScript {
             val fpManager = if (algorithmType == 0) VideoFingerprintManager() else null
             val aiManager = if (algorithmType == 1) com.androidclaw.app.engine.MobileNetFingerprintManager(context) else null
             val captureInterval = if (algorithmType == 1) 1000L else CAPTURE_INTERVAL_MS
+
+            // 🟢 注入旋转补偿参数
+            fpManager?.enableRotationMatch = enableRotationMatch
+            aiManager?.enableRotationMatch = enableRotationMatch
 
             targetVideoTasks.forEach { task ->
                 val count = if (algorithmType == 0) {

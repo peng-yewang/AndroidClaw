@@ -15,6 +15,9 @@ class VideoFingerprintManager {
     /** 指纹库 —— 目标视频 ID 到 PHash 值的映射 */
     private val fingerprintGroups = mutableMapOf<String, List<Long>>()
 
+    /** 是否开启横屏 90 度自动补偿测试 (开启后将在匹配失败后消耗双倍算力) */
+    var enableRotationMatch: Boolean = false
+
     /** 匹配阈值: PHash 建议值在 8-12 之间，默认为 10 (数值越低越严格) */
     var matchThreshold = 10
 
@@ -161,9 +164,29 @@ class VideoFingerprintManager {
     }
 
     /**
-     * 匹配截屏，返回匹配成功的视频 ID 列表
+     * 匹配截屏，包含横屏自动补偿逻辑
      */
     fun matchScreenshots(screenshot: Bitmap, excludeIds: Set<String> = emptySet()): List<String> {
+        val matches = matchScreenshotsNormal(screenshot, excludeIds)
+        if (matches.isNotEmpty() || !enableRotationMatch) {
+            return matches
+        }
+
+        // 🟢 辅助模式：仅当正常匹配物位为空时（疑似横屏），旋转 90 度并重新对网
+        val matrix = android.graphics.Matrix().apply { postRotate(90f) }
+        val rotated = Bitmap.createBitmap(screenshot, 0, 0, screenshot.width, screenshot.height, matrix, true)
+        val matchesRotated = matchScreenshotsNormal(rotated, excludeIds)
+        if (matchesRotated.isNotEmpty()) {
+            com.androidclaw.app.log.LogManager.log("🔄 PHash：横屏 90° 自动姿态补偿成功匹配！", com.androidclaw.app.log.LogManager.Level.SUCCESS)
+        }
+        rotated.recycle()
+        return matchesRotated
+    }
+
+    /**
+     * 底层单姿势匹配
+     */
+    private fun matchScreenshotsNormal(screenshot: Bitmap, excludeIds: Set<String> = emptySet()): List<String> {
         if (fingerprintGroups.isEmpty()) return emptyList()
 
         val screenshotHash = computePHash(screenshot)

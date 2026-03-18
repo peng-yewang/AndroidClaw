@@ -19,6 +19,9 @@ class MobileNetFingerprintManager(context: Context) {
     /** 智能特征库 —— 目标视频 ID 到特征向量列表的映射 */
     private val fingerprintGroups = mutableMapOf<String, List<FloatArray>>()
 
+    /** 是否开启横屏 90 度自动补偿测试 (开启后将在匹配失败后消耗双倍算力) */
+    var enableRotationMatch: Boolean = false
+
     /** TFLite 推理机 */
     private var interpreter: Interpreter? = null
 
@@ -101,9 +104,29 @@ class MobileNetFingerprintManager(context: Context) {
     }
 
     /**
-     * 匹配截屏，应用余弦相似度得出雷同视频
+     * 匹配截屏，包含横屏姿态自动补偿比对
      */
     fun matchScreenshots(screenshot: Bitmap, excludeIds: Set<String> = emptySet()): List<String> {
+        val matches = matchScreenshotsNormal(screenshot, excludeIds)
+        if (matches.isNotEmpty() || !enableRotationMatch) {
+            return matches
+        }
+
+        // 🟢 辅助模式：仅当正常姿态对不上，且开启补偿测试时，侧转视图二次验证
+        val matrix = android.graphics.Matrix().apply { postRotate(90f) }
+        val rotated = Bitmap.createBitmap(screenshot, 0, 0, screenshot.width, screenshot.height, matrix, true)
+        val matchesRotated = matchScreenshotsNormal(rotated, excludeIds)
+        if (matchesRotated.isNotEmpty()) {
+            LogManager.log("🔄 AI：横屏 90° 自动姿态补偿成功匹配！", LogManager.Level.SUCCESS)
+        }
+        rotated.recycle()
+        return matchesRotated
+    }
+
+    /**
+     * 底层单姿势匹配
+     */
+    private fun matchScreenshotsNormal(screenshot: Bitmap, excludeIds: Set<String> = emptySet()): List<String> {
         if (fingerprintGroups.isEmpty() || interpreter == null) return emptyList()
 
         val capturedVector = runInference(screenshot)

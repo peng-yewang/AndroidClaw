@@ -247,22 +247,40 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        // 🟢 动态方案验证：提供算法模式选择对话框
+        // 🟢 级联选择 ①：选择算法方案
         val options = arrayOf("PHash (感知哈希 - 省电极速)", "MobileNetV3 (轻量AI - 语义特征)")
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("选择识别算法方案")
+            .setTitle("① 选择识别算法方案")
             .setItems(options) { _, which ->
-                val adTask = com.androidclaw.app.task.AdRecognitionTask()
-                adTask.targetVideoTasks = waitingTasks
-                adTask.algorithmType = which // 0->PHash, 1->MobileNetV3
-                
-                pendingTask = adTask
-                
-                val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
-                screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+                // 🟢 级联选择 ②：确认是否开启旋转对轨补偿测试
+                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("② 开启横屏姿态旋转补偿？")
+                    .setMessage("开启后，若常规姿态没有匹配上，会自动尝试旋转 90 度二次验证 (双倍算耗)")
+                    .setPositiveButton("开启") { _, _ ->
+                        executeAdTaskWithParams(which, true, waitingTasks)
+                    }
+                    .setNegativeButton("不开启") { _, _ ->
+                        executeAdTaskWithParams(which, false, waitingTasks)
+                    }
+                    .show()
             }
             .setNegativeButton("取消", null)
             .show()
+    }
+
+    /**
+     * 实际拉起 AdRecognitionTask 并加载对应的参数
+     */
+    private fun executeAdTaskWithParams(algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
+        val adTask = com.androidclaw.app.task.AdRecognitionTask()
+        adTask.targetVideoTasks = waitingTasks
+        adTask.algorithmType = algorithm
+        adTask.enableRotationMatch = enableRotation
+
+        pendingTask = adTask
+
+        val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+        screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
     private fun handleAutomaticQueue(state: TaskManager.TaskState) {
