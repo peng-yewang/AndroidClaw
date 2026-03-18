@@ -18,3 +18,6 @@ gen/
 out/
 .navigation/
 *.log
+
+# Local update proposal files
+方案升级.md
