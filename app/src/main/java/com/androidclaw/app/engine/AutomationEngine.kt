@@ -54,7 +54,11 @@ class AutomationEngine(private val context: Context) {
             val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
             if (launchIntent != null) {
                 launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                context.startActivity(launchIntent)
+                if (service != null) {
+                    service?.startActivity(launchIntent)
+                } else {
+                    context.startActivity(launchIntent)
+                }
                 LogManager.log("启动应用: $packageName", LogManager.Level.INFO)
                 true
             } else {

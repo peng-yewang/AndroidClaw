@@ -37,6 +37,7 @@ class TaskManager(private val context: Context) {
     init {
         // 注册默认任务
         registerTask(DouyinAdVerifyTask())
+        registerTask(DouyinVideoMatchTask()) // newly added video match task
         registerTask(TencentVideoAdVerifyTask())
         registerTask(AdRecognitionTask())
     }
@@ -76,11 +77,19 @@ class TaskManager(private val context: Context) {
         val hasVideo = recordResultCode != null
         ClawForegroundService.start(context, hasVideo)
 
-        // 广告识别任务自行管理录屏，传递权限数据
-        val isAdRecognition = task is AdRecognitionTask
-        if (isAdRecognition && recordResultCode != null && recordData != null) {
-            (task as AdRecognitionTask).recordResultCode = recordResultCode
-            task.recordData = recordData
+        // 广告识别及特定匹配任务自行管理录屏，传递权限数据
+        val isSelfManagedRecord = task is AdRecognitionTask || task is DouyinVideoMatchTask
+        if (isSelfManagedRecord && recordResultCode != null && recordData != null) {
+            when (task) {
+                is AdRecognitionTask -> {
+                    task.recordResultCode = recordResultCode
+                    task.recordData = recordData
+                }
+                is DouyinVideoMatchTask -> {
+                    task.recordResultCode = recordResultCode
+                    task.recordData = recordData
+                }
+            }
         }
 
         currentJob = scope.launch {
@@ -89,7 +98,7 @@ class TaskManager(private val context: Context) {
                 delay(1000)
                 
                 // 开始录屏 (广告识别任务自行管理，其他任务由 TaskManager 管理)
-                if (!isAdRecognition && recordResultCode != null && recordData != null) {
+                if (!isSelfManagedRecord && recordResultCode != null && recordData != null) {
                     screenRecorder.startRecording(recordResultCode, recordData)
                 }
 
@@ -108,8 +117,8 @@ class TaskManager(private val context: Context) {
                 LogManager.log("任务异常: ${e.message}", LogManager.Level.ERROR)
                 updateState(TaskState.FAILED, "任务异常: ${e.message}")
             } finally {
-                // 停止录屏 (广告识别任务已自行清理)
-                if (!isAdRecognition) {
+                // 停止录屏 (广告识别或匹配任务已自行清理)
+                if (!isSelfManagedRecord) {
                     screenRecorder.stopRecording()
                 }
                 // 停止前台服务

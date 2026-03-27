@@ -25,12 +25,23 @@ object LogManager {
     private val listeners = CopyOnWriteArrayList<(TaskLog) -> Unit>()
 
     /**
-     * 添加日志
+     * 添加日志并输出到控制台
      */
     fun log(message: String, level: Level = Level.INFO) {
         val entry = TaskLog(message = message, level = level)
         logs.add(entry)
-        Log.d(TAG, entry.toString())
+
+        // 根据级别输出到不同级别的 Logcat，避免由默认的 Debug 级别被 AS 过滤
+        val logContent = entry.toString()
+        when (level) {
+            Level.INFO -> Log.i(TAG, logContent)
+            Level.WARN -> Log.w(TAG, logContent)
+            Level.ERROR -> Log.e(TAG, logContent)
+            Level.SUCCESS -> Log.i(TAG, "🟢 [SUCCESS] $logContent")
+        }
+
+        // 同时输出到标准控制台 (System.out)，方便在 Android Studio 的 Run 窗口查看
+        println("$TAG: $logContent")
 
         // 通知所有监听者
         listeners.forEach { listener ->

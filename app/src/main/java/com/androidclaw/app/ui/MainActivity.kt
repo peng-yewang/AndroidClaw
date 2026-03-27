@@ -241,26 +241,53 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val waitingTasks = viewModel.getWaitingVideoTasks()
-        if (waitingTasks.isEmpty()) {
-            Toast.makeText(this, "队列中没有等待的任务", Toast.LENGTH_SHORT).show()
-            return
-        }
+        // 🟢 第一步：选择具体要执行的自动化任务
+        val allTasks = taskManager.getRegisteredTasks()
+        val taskNames = allTasks.map { it.name }.toTypedArray()
 
-        // 🟢 级联选择 ①：选择算法方案
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("第一步：选择验证任务")
+            .setItems(taskNames) { _, index ->
+                val selectedTask = allTasks[index]
+                handleTaskSelection(selectedTask)
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun handleTaskSelection(task: com.androidclaw.app.task.TaskScript) {
+        // 判断是否为需要“视频队列+算法匹配”类的重度任务
+        if (task is com.androidclaw.app.task.AdRecognitionTask || 
+            task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+            
+            val waitingTasks = viewModel.getWaitingVideoTasks()
+            if (waitingTasks.isEmpty()) {
+                Toast.makeText(this, "请先添加目标视频到队列中", Toast.LENGTH_LONG).show()
+                return
+            }
+            
+            // 🟢 第二步：进入算法选择流程
+            showAlgorithmSelectionFlow(task, waitingTasks)
+        } else {
+            // 普通脚本类任务，无需录屏权限
+            taskManager.executeTask(task)
+        }
+    }
+
+    private fun showAlgorithmSelectionFlow(task: com.androidclaw.app.task.TaskScript, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
         val options = arrayOf("PHash (感知哈希 - 省电极速)", "MobileNetV3 (轻量AI - 语义特征)")
         androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("① 选择识别算法方案")
-            .setItems(options) { _, which ->
-                // 🟢 级联选择 ②：确认是否开启旋转对轨补偿测试
+            .setTitle("第二步：选择识别算法方案")
+            .setItems(options) { _, algorithmIndex ->
+                // 🟢 第三步：确认是否开启旋转对轨补偿测试
                 androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
-                    .setTitle("② 开启横屏姿态旋转补偿？")
-                    .setMessage("开启后，若常规姿态没有匹配上，会自动尝试旋转 90 度二次验证 (双倍算耗)")
+                    .setTitle("第三步：开启横屏姿态旋转补偿？")
+                    .setMessage("开启后，针对不规则比例广告会自动尝试二次旋转验核")
                     .setPositiveButton("开启") { _, _ ->
-                        executeAdTaskWithParams(which, true, waitingTasks)
+                        requestScreenCapture(task, algorithmIndex, true, waitingTasks)
                     }
                     .setNegativeButton("不开启") { _, _ ->
-                        executeAdTaskWithParams(which, false, waitingTasks)
+                        requestScreenCapture(task, algorithmIndex, false, waitingTasks)
                     }
                     .show()
             }
@@ -268,17 +295,24 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /**
-     * 实际拉起 AdRecognitionTask 并加载对应的参数
-     */
-    private fun executeAdTaskWithParams(algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
-        val adTask = com.androidclaw.app.task.AdRecognitionTask()
-        adTask.targetVideoTasks = waitingTasks
-        adTask.algorithmType = algorithm
-        adTask.enableRotationMatch = enableRotation
+    private fun requestScreenCapture(task: com.androidclaw.app.task.TaskScript, algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
+        // 注入参数
+        when (task) {
+            is com.androidclaw.app.task.AdRecognitionTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
+            is com.androidclaw.app.task.DouyinVideoMatchTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
+        }
 
-        pendingTask = adTask
+        pendingTask = task
 
+        // 需要申请录屏权限
         val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
         screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
