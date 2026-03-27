@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">AndroidClaw</string>
-    <string name="accessibility_service_description">AndroidClaw 广告验证自动化服务。此服务将监控屏幕内容并执行自动化操作，用于广告投放效果验证。</string>
+    <string name="accessibility_service_description">AndroidClaw 广告监测自动化服务。本服务监控屏幕视觉特征并与后台目标比对，用于广告侦听及自动化导出证据片段。</string>
 
     <!-- 主界面 -->
     <string name="service_status">服务状态</string>
@@ -19,8 +19,8 @@
     <string name="btn_export_log">导出</string>
 
     <!-- 任务描述 -->
-    <string name="task_douyin_ad">抖音开屏广告验证</string>
-    <string name="task_desc_douyin_ad">启动抖音 → 检测开屏广告 → 倒计时点击 → 京东落地页操作 → 返回验证</string>
+    <string name="task_douyin_ad">智能视频广告识别</string>
+    <string name="task_desc_douyin_ad">持续录屏捕获 → 特征算法（PHash/AI）实时匹配 → 自动无损裁剪导出证据片段</string>
 
     <!-- 前台服务 -->
     <string name="foreground_notification_title">AndroidClaw 运行中</string>
