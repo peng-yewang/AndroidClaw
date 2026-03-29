@@ -37,7 +37,8 @@ class TaskManager(private val context: Context) {
     init {
         // 注册默认任务
         registerTask(DouyinAdVerifyTask())
-        registerTask(DouyinVideoMatchTask()) // newly added video match task
+        registerTask(DouyinVideoMatchTask())
+        registerTask(TencentVideoMatchTask()) // Added Tencent video match task
         registerTask(TencentVideoAdVerifyTask())
         registerTask(AdRecognitionTask())
     }
@@ -78,7 +79,7 @@ class TaskManager(private val context: Context) {
         ClawForegroundService.start(context, hasVideo)
 
         // 广告识别及特定匹配任务自行管理录屏，传递权限数据
-        val isSelfManagedRecord = task is AdRecognitionTask || task is DouyinVideoMatchTask
+        val isSelfManagedRecord = task is AdRecognitionTask || task is DouyinVideoMatchTask || task is TencentVideoMatchTask
         if (isSelfManagedRecord && recordResultCode != null && recordData != null) {
             when (task) {
                 is AdRecognitionTask -> {
@@ -86,6 +87,10 @@ class TaskManager(private val context: Context) {
                     task.recordData = recordData
                 }
                 is DouyinVideoMatchTask -> {
+                    task.recordResultCode = recordResultCode
+                    task.recordData = recordData
+                }
+                is TencentVideoMatchTask -> {
                     task.recordResultCode = recordResultCode
                     task.recordData = recordData
                 }

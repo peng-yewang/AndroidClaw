@@ -258,7 +258,8 @@ class MainActivity : AppCompatActivity() {
     private fun handleTaskSelection(task: com.androidclaw.app.task.TaskScript) {
         // 判断是否为需要“视频队列+算法匹配”类的重度任务
         if (task is com.androidclaw.app.task.AdRecognitionTask || 
-            task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+            task is com.androidclaw.app.task.DouyinVideoMatchTask ||
+            task is com.androidclaw.app.task.TencentVideoMatchTask) {
             
             val waitingTasks = viewModel.getWaitingVideoTasks()
             if (waitingTasks.isEmpty()) {
@@ -304,6 +305,11 @@ class MainActivity : AppCompatActivity() {
                 task.enableRotationMatch = enableRotation
             }
             is com.androidclaw.app.task.DouyinVideoMatchTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
+            is com.androidclaw.app.task.TencentVideoMatchTask -> {
                 task.targetVideoTasks = waitingTasks
                 task.algorithmType = algorithm
                 task.enableRotationMatch = enableRotation
