@@ -326,6 +326,14 @@ class AutomationEngine(private val context: Context) {
     }
 
     /**
+     * 打开最近任务后台
+     */
+    fun showRecents(): Boolean {
+        LogManager.log("打开最近任务后台", LogManager.Level.INFO)
+        return service?.openRecents() ?: false
+    }
+
+    /**
      * 按 Home 键
      */
     fun goHome(): Boolean {
