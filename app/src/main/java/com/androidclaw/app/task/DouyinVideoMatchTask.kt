@@ -2,10 +2,9 @@ package com.androidclaw.app.task
 
 import android.content.Context
 import android.content.Intent
-import android.hardware.display.DisplayManager
-import android.media.MediaRecorder
 import android.media.projection.MediaProjectionManager
 import android.os.Environment
+import com.androidclaw.app.engine.AudioVideoRecorder
 import com.androidclaw.app.engine.AutomationEngine
 import com.androidclaw.app.engine.MobileNetFingerprintManager
 import com.androidclaw.app.engine.ScreenCapturer
@@ -56,8 +55,7 @@ class DouyinVideoMatchTask : TaskScript {
         }
 
         var sharedProjection: android.media.projection.MediaProjection? = null
-        var recorderVd: android.hardware.display.VirtualDisplay? = null
-        var recorder: MediaRecorder? = null
+        var avRecorder: AudioVideoRecorder? = null
         val capturer = ScreenCapturer(context)
         var tmpFile: File? = null
         val adIntervals = mutableListOf<AdInterval>()
@@ -105,18 +103,11 @@ class DouyinVideoMatchTask : TaskScript {
             val rw = if (sw % 2 == 0) sw else sw - 1
             val rh = if (sh % 2 == 0) sh else sh - 1
 
-            recorder = createRecorder(context).apply {
-                setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoSize(rw, rh)
-                setVideoFrameRate(30)
-                setVideoEncodingBitRate(rw * rh * 2)
-                setOutputFile(tmpFile.absolutePath)
-                prepare()
+            // 🔴 音视频同步录制器 (内部音频 + 屏幕画面)
+            avRecorder = AudioVideoRecorder(context).also {
+                it.prepare(sharedProjection!!, rw, rh, sd, tmpFile.absolutePath)
+                it.start()
             }
-            recorderVd = sharedProjection.createVirtualDisplay("DyVerifier", rw, rh, sd, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, recorder.surface, null, null)
-            recorder.start()
             recordStartWallMs = System.currentTimeMillis()
 
             // ===== 核心业务循环 =====
@@ -291,11 +282,9 @@ class DouyinVideoMatchTask : TaskScript {
             withContext(kotlinx.coroutines.NonCancellable) {
                 // 清理截屏录屏资源
                 capturer.stop()
-                try { recorder?.stop() } catch (_: Exception) {}
-                try { recorder?.release() } catch (_: Exception) {}
-                recorder = null
-                try { recorderVd?.release() } catch (_: Exception) {}
-                recorderVd = null
+                try { avRecorder?.stop() } catch (_: Exception) {}
+                try { avRecorder?.release() } catch (_: Exception) {}
+                avRecorder = null
                 try { sharedProjection?.stop() } catch (_: Exception) {}
                 sharedProjection = null
 
@@ -552,14 +541,7 @@ class DouyinVideoMatchTask : TaskScript {
         }
     }
 
-    private fun createRecorder(context: Context): MediaRecorder {
-        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
-            MediaRecorder(context)
-        } else {
-            @Suppress("DEPRECATION")
-            MediaRecorder()
-        }
-    }
+
 
     private fun getContext(engine: AutomationEngine): Context? {
         return try {

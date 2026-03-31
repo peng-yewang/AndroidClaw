@@ -2,12 +2,8 @@ package com.androidclaw.app.engine
 
 import android.content.Context
 import android.content.Intent
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.MediaRecorder
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
-import android.os.Environment
 import android.util.DisplayMetrics
 import android.view.WindowManager
 import com.androidclaw.app.log.LogManager
@@ -15,12 +11,17 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import android.os.Environment
 
+/**
+ * 独立屏幕录制器 (供非自管理任务使用)
+ *
+ * 内部使用 AudioVideoRecorder 实现音视频同步录制。
+ */
 class ScreenRecorder(private val context: Context) {
 
     private var mediaProjection: MediaProjection? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var mediaRecorder: MediaRecorder? = null
+    private var avRecorder: AudioVideoRecorder? = null
     private var savedPath: String = ""
 
     fun startRecording(resultCode: Int, data: Intent): Boolean {
@@ -34,6 +35,7 @@ class ScreenRecorder(private val context: Context) {
 
             val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
             val metrics = DisplayMetrics()
+            @Suppress("DEPRECATION")
             windowManager.defaultDisplay.getRealMetrics(metrics)
 
             // 避免因奇数分辨率导致硬件编码器 (H264) prepare 报错
@@ -50,27 +52,12 @@ class ScreenRecorder(private val context: Context) {
             val file = File(dir, fileName)
             savedPath = file.absolutePath
 
-            mediaRecorder = MediaRecorder().apply {
-                setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                val bitRate = screenWidth * screenHeight * 3
-                setVideoEncodingBitRate(bitRate)
-                setVideoFrameRate(30)
-                setVideoSize(screenWidth, screenHeight)
-                setOutputFile(file.absolutePath)
-                prepare()
+            avRecorder = AudioVideoRecorder(context).also {
+                it.prepare(mediaProjection!!, screenWidth, screenHeight, screenDensity, file.absolutePath)
+                it.start()
             }
 
-            virtualDisplay = mediaProjection?.createVirtualDisplay(
-                "ScreenRecorder",
-                screenWidth, screenHeight, screenDensity,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                mediaRecorder?.surface, null, null
-            )
-
-            mediaRecorder?.start()
-            LogManager.log("开始录制视频: $fileName", LogManager.Level.SUCCESS)
+            LogManager.log("开始录制视频 (含内部音频): $fileName", LogManager.Level.SUCCESS)
             true
         } catch (e: Exception) {
             LogManager.log("录屏启动失败: ${e.message}", LogManager.Level.ERROR)
@@ -81,19 +68,15 @@ class ScreenRecorder(private val context: Context) {
 
     fun stopRecording() {
         try {
-            if (mediaRecorder != null) {
-                mediaRecorder?.stop()
-                mediaRecorder?.reset()
+            if (avRecorder != null) {
+                avRecorder?.stop()
                 LogManager.log("录屏已保存至本地: $savedPath", LogManager.Level.SUCCESS)
             }
         } catch (e: Exception) {
             LogManager.log("停止录屏异常: ${e.message}", LogManager.Level.WARN)
         } finally {
-            mediaRecorder?.release()
-            mediaRecorder = null
-
-            virtualDisplay?.release()
-            virtualDisplay = null
+            avRecorder?.release()
+            avRecorder = null
 
             mediaProjection?.stop()
             mediaProjection = null

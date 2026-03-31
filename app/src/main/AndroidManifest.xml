@@ -6,6 +6,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 录制内部音频需要 (AudioPlaybackCapture API 要求，不会录外部声音) -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 查询已安装应用 -->
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
@@ -52,7 +55,7 @@
         <service
             android:name=".service.ClawForegroundService"
             android:exported="false"
-            android:foregroundServiceType="specialUse|mediaProjection">
+            android:foregroundServiceType="specialUse|mediaProjection|microphone">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="automation_task" />
         </service>

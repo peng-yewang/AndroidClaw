@@ -1,6 +1,8 @@
 package com.androidclaw.app.ui
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
@@ -8,6 +10,8 @@ import android.os.Looper
 import android.provider.Settings
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModelProvider
 import androidx.recyclerview.widget.ItemTouchHelper
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -259,7 +263,8 @@ class MainActivity : AppCompatActivity() {
         // 判断是否为需要“视频队列+算法匹配”类的重度任务
         if (task is com.androidclaw.app.task.AdRecognitionTask || 
             task is com.androidclaw.app.task.DouyinVideoMatchTask ||
-            task is com.androidclaw.app.task.TencentVideoMatchTask) {
+            task is com.androidclaw.app.task.TencentVideoMatchTask ||
+            task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
             
             val waitingTasks = viewModel.getWaitingVideoTasks()
             if (waitingTasks.isEmpty()) {
@@ -314,13 +319,52 @@ class MainActivity : AppCompatActivity() {
                 task.algorithmType = algorithm
                 task.enableRotationMatch = enableRotation
             }
+            is com.androidclaw.app.task.DouyinFeedVideoMatchTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
         }
 
         pendingTask = task
 
-        // 需要申请录屏权限
+        // 先检查 RECORD_AUDIO 权限 (AudioPlaybackCapture 内部音频录制需要)
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.RECORD_AUDIO),
+                REQUEST_CODE_RECORD_AUDIO
+            )
+            return
+        }
+
+        // 已有录音权限，直接申请录屏权限
+        launchScreenCaptureRequest()
+    }
+
+    private fun launchScreenCaptureRequest() {
         val projectionManager = getSystemService(android.content.Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
         screenCaptureLauncher.launch(projectionManager.createScreenCaptureIntent())
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CODE_RECORD_AUDIO) {
+            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                // 录音权限已授予，继续申请录屏权限
+                launchScreenCaptureRequest()
+            } else {
+                Toast.makeText(this, "未授予录音权限，录制的视频将没有声音", Toast.LENGTH_LONG).show()
+                // 即使没有录音权限也允许继续（降级为仅视频录制）
+                launchScreenCaptureRequest()
+            }
+        }
+    }
+
+    companion object {
+        private const val REQUEST_CODE_RECORD_AUDIO = 1001
     }
 
     private fun handleAutomaticQueue(state: TaskManager.TaskState) {
