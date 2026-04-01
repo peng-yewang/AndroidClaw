@@ -290,14 +290,68 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("第三步：开启横屏姿态旋转补偿？")
                     .setMessage("开启后，针对不规则比例广告会自动尝试二次旋转验核")
                     .setPositiveButton("开启") { _, _ ->
-                        requestScreenCapture(task, algorithmIndex, true, waitingTasks)
+                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
+                            showDouyinFeedAdConfigFlow(task, algorithmIndex, true, waitingTasks)
+                        } else {
+                            requestScreenCapture(task, algorithmIndex, true, waitingTasks)
+                        }
                     }
                     .setNegativeButton("不开启") { _, _ ->
-                        requestScreenCapture(task, algorithmIndex, false, waitingTasks)
+                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
+                            showDouyinFeedAdConfigFlow(task, algorithmIndex, false, waitingTasks)
+                        } else {
+                            requestScreenCapture(task, algorithmIndex, false, waitingTasks)
+                        }
                     }
                     .show()
             }
             .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showDouyinFeedAdConfigFlow(task: com.androidclaw.app.task.DouyinFeedVideoMatchTask, algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
+        // 第一步：输入时长
+        val input = android.widget.EditText(this).apply {
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            hint = "单位：秒 (例如: 30)"
+        }
+        
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("参数配置：广告总时长")
+            .setMessage("请输入广告视频的预计总时长（秒）：")
+            .setView(input)
+            .setPositiveButton("下一步") { _, _ ->
+                val durationS = input.text.toString().toLongOrNull() ?: 30L
+                val durationMs = durationS * 1000L
+                
+                // 第二步：选择跳转模式
+                val modes = arrayOf("模式 A: 播放 15s 后跳转 (跳转回后再看完整)", "模式 B: 播放完毕后再跳转 (看完整后再跳落地页)")
+                androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("参数配置：播放跳转模式")
+                    .setItems(modes) { _, modeIndex ->
+                        task.configuredAdDurationMs = durationMs
+                        task.playFullVideoBeforeJump = (modeIndex == 1)
+                        
+                        // 第三步：选择是否加购
+                        androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+                            .setTitle("参数配置：落地页加购动作")
+                            .setMessage("是否在进入落地页后执行『加入购物车』并关闭的动作？")
+                            .setPositiveButton("执行") { _, _ ->
+                                task.clickAddToCart = true
+                                requestScreenCapture(task, algorithm, enableRotation, waitingTasks)
+                            }
+                            .setNegativeButton("不执行") { _, _ ->
+                                task.clickAddToCart = false
+                                requestScreenCapture(task, algorithm, enableRotation, waitingTasks)
+                            }
+                            .setCancelable(false)
+                            .show()
+                    }
+                    .setCancelable(false)
+                    .show()
+            }
+            .setNegativeButton("取消", null)
+            .setCancelable(false)
             .show()
     }
 

@@ -23,7 +23,8 @@ class DouyinFeedVideoMatchTask : TaskScript {
     override val name = "抖音视频广告匹配捕获"
     override val description = "在抖音首页推荐流中寻找目标视频，未刷到则自动下滑刷新"
     override var configuredAdDurationMs: Long = 0L
-
+    var playFullVideoBeforeJump: Boolean = false // 是否等播放完再跳转落地页
+    var clickAddToCart: Boolean = false // 是否执行加购动作
     var targetVideoTasks: List<VideoTask> = emptyList()
     var recordResultCode: Int = 0
     var recordData: Intent? = null
@@ -31,6 +32,7 @@ class DouyinFeedVideoMatchTask : TaskScript {
     var enableRotationMatch: Boolean = false
 
     private var recordStartWallMs = 0L
+    private var videoPlayStartTime = 0L // 精准记录目标视频在环境准备后的起始播放时间
 
     private fun log(message: String, level: LogManager.Level = LogManager.Level.INFO) {
         LogManager.log("[DyFeed] $message", level)
@@ -197,11 +199,11 @@ class DouyinFeedVideoMatchTask : TaskScript {
                                         currentCalendarStartMs = System.currentTimeMillis() - recordStartWallMs
                                         engine.sleep(5000)
 
-                                        // 3. 屏幕中间处下滑一次以展开全部日期
-                                        val (sw, sh) = engine.getScreenSize()
-                                        log("执行日期列表展开 (下滑)...", LogManager.Level.INFO)
-                                        engine.swipe(sw / 2f, sh * 0.4f, sw / 2f, sh * 0.8f, 500)
-                                        engine.sleep(2000)
+                                        // 3. 屏幕中间处下滑一次以展开全部日期 - 偶发性事件，先注释掉
+//                                        val (sw, sh) = engine.getScreenSize()
+//                                        log("执行日期列表展开 (下滑)...", LogManager.Level.INFO)
+//                                        engine.swipe(sw / 2f, sh * 0.4f, sw / 2f, sh * 0.8f, 500)
+//                                        engine.sleep(2000)
 
                                         // 4. 回家 -> 从桌面打开抖音 -> 重刷下来
                                         log("桌面重开抖音连招...", LogManager.Level.INFO)
@@ -213,20 +215,42 @@ class DouyinFeedVideoMatchTask : TaskScript {
                                         log("已重回抖音，执行第二次下滑寻回目标...", LogManager.Level.INFO)
                                         engine.scrollDown(650)
                                         engine.sleep(2000)
+                                        videoPlayStartTime = System.currentTimeMillis() // 🌟 核心锚点：标记视频刷出来的绝对时间
 
                                         preparedVideos.add(videoId)
                                         // 打断当前循环，让整体逻辑重新去监测这个新刷出来的"真目标"
                                         hitInThisItem = true
                                         break
                                     } else {
-                                        log("⭐ 二次确认成功 (环境已准备)！执行落地页跳转...", LogManager.Level.SUCCESS)
-                                        // 1. 跳转落地页并滚动
-                                        jumpToLandingPageAndScroll(engine)
+                                        log("⭐ 二次确认成功 (环境已准备)！执行逻辑选择...", LogManager.Level.SUCCESS)
+                                        
+                                        val now = System.currentTimeMillis()
+                                        val elapsedSinceStart = if (videoPlayStartTime > 0) now - videoPlayStartTime else 0L
+                                        
+                                        if (playFullVideoBeforeJump) {
+                                            // 方案 B: 播放完毕后再跳转
+                                            val totalRequired = if (configuredAdDurationMs > 0) configuredAdDurationMs else 15000L
+                                            val waitTime = Math.max(0L, totalRequired - elapsedSinceStart)
+                                            log("模式 B: 精准等待播放完毕 (已播: $elapsedSinceStart ms, 补足: $waitTime ms)...", LogManager.Level.INFO)
+                                            engine.sleep(waitTime)
+                                            
+                                            // 1. 跳转落地页并滚动
+                                            jumpToLandingPageAndScroll(engine)
+                                        } else {
+                                            // 方案 A: 播放 15s 后跳转 (默认)
+                                            val preJumpWait = Math.max(0L, 15000L - elapsedSinceStart)
+                                            log("模式 A: 精准等待 15s 后跳转 (已播: $elapsedSinceStart ms, 补足: $preJumpWait ms)...", LogManager.Level.INFO)
+                                            engine.sleep(preJumpWait)
+                                            
+                                            // 1. 跳转落地页并滚动
+                                            jumpToLandingPageAndScroll(engine)
 
-                                        // 2. 🟢 返回抖音界面等待广告播放完毕 (固定等待 100s)
-                                        log("落地页采集完成，直接唤回抖音等待广告完整播放 (100s)...", LogManager.Level.INFO)
-                                        engine.launchApp(DOUYIN_PACKAGE)
-                                        engine.sleep(100000)
+                                            // 2. 🟢 返回抖音界面等待广告播放完毕 (已确认后台不继续播放)
+                                            val remainingWait = Math.max(0L, configuredAdDurationMs - 15000L)
+                                            log("落地页采集完成，唤回抖音等待剩余播放时长 ($remainingWait ms)...", LogManager.Level.INFO)
+                                            engine.launchApp(DOUYIN_PACKAGE)
+                                            engine.sleep(remainingWait)
+                                        }
 
                                         // 3. 计算最终结束时间并登记
                                         val finalEndRel = System.currentTimeMillis() - recordStartWallMs
@@ -263,8 +287,8 @@ class DouyinFeedVideoMatchTask : TaskScript {
                         missCount = 0
                     } else {
                         log("⬇️ 没刷到，物理上滑刷新 (10s 已满)", LogManager.Level.INFO)
-                        engine.scrollDown(650) 
-                        engine.sleep(1500)
+                        engine.scrollDown(300)
+//                        engine.sleep(1500)
                     }
                 }
             }
@@ -332,6 +356,16 @@ class DouyinFeedVideoMatchTask : TaskScript {
         val size = engine.getScreenSize()
         engine.clickAt(size.first / 2f, size.second * 0.90f)
         engine.sleep(20000)
+
+        // 🟢 [新功能]：可选落地页“加购”动作
+        if (clickAddToCart) {
+            log("执行加购动作：点击『加入购物车』...", LogManager.Level.INFO)
+            engine.clickAt(678f, 2644f)
+            engine.sleep(3000)
+            log("执行加购动作：点击『X』关闭购物车...", LogManager.Level.INFO)
+            engine.clickAt(1259f, 511f)
+            engine.sleep(2000)
+        }
 
         // 🟢 [智能增强]：动态滚动直至触底
         var lastPageFingerprint = ""
