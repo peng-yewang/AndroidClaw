@@ -113,10 +113,11 @@ class DouyinFeedVideoMatchTask : TaskScript {
 
             // 3. 业务主循环 (FinishedTasks 使用对齐)
             val finishedTasks = mutableSetOf<String>()
+            val preparedVideos = mutableSetOf<String>()
             var missCount = 0
             var currentCalendarStartMs = 0L
             
-            // 🟢 [逻辑调整]：首次启动必须先扫码促活，然后重启再刷视频
+            // 🟢 [逻辑调整]：首次启动必须先扫幕促活，然后重启再刷视频
             log("首次启动：执行扫码促活连招...", LogManager.Level.INFO)
             engine.launchApp(DOUYIN_PACKAGE)
             engine.sleep(8200)
@@ -125,16 +126,6 @@ class DouyinFeedVideoMatchTask : TaskScript {
             log("扫码成功：正在重启抖音以应用画像同步...", LogManager.Level.INFO)
             killApp(engine, DOUYIN_PACKAGE)
             engine.sleep(2000)
-            
-            // 🟢 [策略增强]：中间穿插打开日历停留 5s，并记录作为当前片段开始点
-            log("正在切换至系统日历 (停留5s)...", LogManager.Level.INFO)
-            if (!engine.launchApp("com.android.calendar")) {
-                if (!engine.launchApp("com.huawei.calendar")) {
-                    engine.launchApp("com.hihonor.calendar")
-                }
-            }
-            currentCalendarStartMs = System.currentTimeMillis() - recordStartWallMs
-            engine.sleep(5000)
             
             if (!engine.launchApp(DOUYIN_PACKAGE)) {
                 log("重开失败，任务中止", LogManager.Level.ERROR)
@@ -189,26 +180,64 @@ class DouyinFeedVideoMatchTask : TaskScript {
                             // 只要满足匹配帧数且静默 > 3s，就收网
                             if (idleTime >= 3000L || (System.currentTimeMillis() - itemStart > ITEM_MONITOR_MS - 500)) {
                                 if (matchCount >= 4 && (lastMatch - start) >= 800L) {
-                                    log("⭐ 成功确认目标 Feed 广告轨迹！正在执行跳转...", LogManager.Level.SUCCESS)
-                                    // 1. 跳转落地页并滚动
-                                    jumpToLandingPageAndScroll(engine)
+                                    if (videoId !in preparedVideos) {
+                                        log("🎯 匹配到目标 $videoId，开始执行环境准备连招 (回滑 -> 日历+展开 -> 桌面重开)...", LogManager.Level.INFO)
+                                        
+                                        // 1. 往上刷一下回到上一条视频
+                                        engine.scrollUp(650)
+                                        engine.sleep(2000)
 
-                                    // 2. 🟢 返回抖音界面等待广告播放完毕 (固定等待 60s)
-                                    log("落地页采集完成，直接唤回抖音等待广告完整播放 (60s)...", LogManager.Level.INFO)
-                                    engine.launchApp(DOUYIN_PACKAGE)
-                                    engine.sleep(100000)
+                                        // 2. 切换系统日历并标记开始时间
+                                        log("正在切换至系统日历 (并标记裁切起点)...", LogManager.Level.INFO)
+                                        if (!engine.launchApp("com.android.calendar")) {
+                                            if (!engine.launchApp("com.huawei.calendar")) {
+                                                engine.launchApp("com.hihonor.calendar")
+                                            }
+                                        }
+                                        currentCalendarStartMs = System.currentTimeMillis() - recordStartWallMs
+                                        engine.sleep(5000)
 
-                                    // 3. 计算最终结束时间并登记 (使用最新周期的日历起始点)
-                                    val finalEndRel = System.currentTimeMillis() - recordStartWallMs
-                                    adIntervals.add(AdInterval(videoId, currentCalendarStartMs, finalEndRel))
-                                    
-                                    finishedTasks.add(videoId)
-                                    LogManager.log("${LOG_PREFIX_VIDEO_STATUS}${videoId}|COMPLETED", LogManager.Level.INFO)
-                                    
-                                    // 4. 清理后台
-                                    cleanBackgroundTasks(engine)
-                                    hitInThisItem = true
-                                    break
+                                        // 3. 屏幕中间处下滑一次以展开全部日期
+                                        val (sw, sh) = engine.getScreenSize()
+                                        log("执行日期列表展开 (下滑)...", LogManager.Level.INFO)
+                                        engine.swipe(sw / 2f, sh * 0.4f, sw / 2f, sh * 0.8f, 500)
+                                        engine.sleep(2000)
+
+                                        // 4. 回家 -> 从桌面打开抖音 -> 重刷下来
+                                        log("桌面重开抖音连招...", LogManager.Level.INFO)
+                                        engine.goHome()
+                                        engine.sleep(2000)
+                                        engine.launchApp(DOUYIN_PACKAGE)
+                                        engine.sleep(4000)
+                                        
+                                        log("已重回抖音，执行第二次下滑寻回目标...", LogManager.Level.INFO)
+                                        engine.scrollDown(650)
+                                        engine.sleep(2000)
+
+                                        preparedVideos.add(videoId)
+                                        // 打断当前循环，让整体逻辑重新去监测这个新刷出来的"真目标"
+                                        hitInThisItem = true
+                                        break
+                                    } else {
+                                        log("⭐ 二次确认成功 (环境已准备)！执行落地页跳转...", LogManager.Level.SUCCESS)
+                                        // 1. 跳转落地页并滚动
+                                        jumpToLandingPageAndScroll(engine)
+
+                                        // 2. 🟢 返回抖音界面等待广告播放完毕 (固定等待 100s)
+                                        log("落地页采集完成，直接唤回抖音等待广告完整播放 (100s)...", LogManager.Level.INFO)
+                                        engine.launchApp(DOUYIN_PACKAGE)
+                                        engine.sleep(100000)
+
+                                        // 3. 计算最终结束时间并登记
+                                        val finalEndRel = System.currentTimeMillis() - recordStartWallMs
+                                        adIntervals.add(AdInterval(videoId, currentCalendarStartMs, finalEndRel))
+                                        
+                                        finishedTasks.add(videoId)
+                                        // 4. 清理后台
+                                        cleanBackgroundTasks(engine)
+                                        hitInThisItem = true
+                                        break
+                                    }
                                 }
                             }
                         }
@@ -227,14 +256,8 @@ class DouyinFeedVideoMatchTask : TaskScript {
                         applyQrCodeStrategy(engine)
                         killApp(engine, DOUYIN_PACKAGE)
                         
-                        // 🟢 重点修复：重试阶段也必须更新日历起始点并中转，确保环境干净且时间轴对齐
-                        log("正在执行重试周期内的日历中转...", LogManager.Level.INFO)
-                        if (!engine.launchApp("com.android.calendar")) {
-                            if (!engine.launchApp("com.huawei.calendar")) engine.launchApp("com.hihonor.calendar")
-                        }
-                        currentCalendarStartMs = System.currentTimeMillis() - recordStartWallMs
-                        engine.sleep(5000)
-                        
+                        // 🟢 [策略调整]：不再此处准备日历，仅重启应用，环境准备将在匹配到目标后执行
+                        log("正在执行重试周期内的重启...", LogManager.Level.INFO)
                         engine.launchApp(DOUYIN_PACKAGE)
                         engine.sleep(4000)
                         missCount = 0
@@ -316,8 +339,8 @@ class DouyinFeedVideoMatchTask : TaskScript {
         val rect = android.graphics.Rect()
 
         log("落地页已进入，开始动态触底探测...", LogManager.Level.INFO)
-        while (scrollAttempts < 15) { // 限制最大 15 次，防止某些特殊页面
-            engine.scrollDown(800)
+        while (scrollAttempts < 20) { // 限制最大 15 次，防止某些特殊页面
+            engine.scrollDown(400)
             engine.sleep(1500)
             
             val nodes = com.androidclaw.app.engine.NodeFinder.findAll()
@@ -327,7 +350,7 @@ class DouyinFeedVideoMatchTask : TaskScript {
                 "${node.viewIdResourceName}-${node.text}-${node.contentDescription}-${rect.top}"
             }
             
-            if (fingerprint == lastPageFingerprint && lastPageFingerprint.isNotEmpty() && scrollAttempts >= 10) {
+            if (fingerprint == lastPageFingerprint && lastPageFingerprint.isNotEmpty() && scrollAttempts >= 15) {
                 log("检测到页面内容不再变化，确认已到达最底部", LogManager.Level.SUCCESS)
                 break
             }
