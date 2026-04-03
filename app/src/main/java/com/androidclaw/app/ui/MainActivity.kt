@@ -290,15 +290,15 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("第三步：开启横屏姿态旋转补偿？")
                     .setMessage("开启后，针对不规则比例广告会自动尝试二次旋转验核")
                     .setPositiveButton("开启") { _, _ ->
-                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
-                            showDouyinFeedAdConfigFlow(task, algorithmIndex, true, waitingTasks)
+                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask || task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+                            showDouyinAdConfigFlow(task, algorithmIndex, true, waitingTasks)
                         } else {
                             requestScreenCapture(task, algorithmIndex, true, waitingTasks)
                         }
                     }
                     .setNegativeButton("不开启") { _, _ ->
-                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
-                            showDouyinFeedAdConfigFlow(task, algorithmIndex, false, waitingTasks)
+                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask || task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+                            showDouyinAdConfigFlow(task, algorithmIndex, false, waitingTasks)
                         } else {
                             requestScreenCapture(task, algorithmIndex, false, waitingTasks)
                         }
@@ -309,7 +309,7 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun showDouyinFeedAdConfigFlow(task: com.androidclaw.app.task.DouyinFeedVideoMatchTask, algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
+    private fun showDouyinAdConfigFlow(task: com.androidclaw.app.task.TaskScript, algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
         // 第一步：输入时长
         val input = android.widget.EditText(this).apply {
             inputType = android.text.InputType.TYPE_CLASS_NUMBER
@@ -329,20 +329,14 @@ class MainActivity : AppCompatActivity() {
                 androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
                     .setTitle("参数配置：播放跳转模式")
                     .setItems(modes) { _, modeIndex ->
-                        task.configuredAdDurationMs = durationMs
-                        task.playFullVideoBeforeJump = (modeIndex == 1)
+                        val isFull = (modeIndex == 1)
                         
-                        // 第三步：选择是否加购
+                        // 第三步：选择加购/交互模式
+                        val cartModes = arrayOf("不执行", "普通落地页加购 (XSL 模式)", "直播间小黄车点击 (主播模式)")
                         androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
-                            .setTitle("参数配置：落地页加购动作")
-                            .setMessage("是否在进入落地页后执行『加入购物车』并关闭的动作？")
-                            .setPositiveButton("执行") { _, _ ->
-                                task.clickAddToCart = true
-                                requestScreenCapture(task, algorithm, enableRotation, waitingTasks)
-                            }
-                            .setNegativeButton("不执行") { _, _ ->
-                                task.clickAddToCart = false
-                                requestScreenCapture(task, algorithm, enableRotation, waitingTasks)
+                            .setTitle("参数配置：落地页交互模式")
+                            .setItems(cartModes) { _, cartIndex ->
+                                applyConfigAndStart(task, durationMs, isFull, cartIndex, algorithm, enableRotation, waitingTasks)
                             }
                             .setCancelable(false)
                             .show()
@@ -353,6 +347,18 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton("取消", null)
             .setCancelable(false)
             .show()
+    }
+
+    private fun applyConfigAndStart(task: com.androidclaw.app.task.TaskScript, durationMs: Long, isFull: Boolean, addCartMode: Int, algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {
+        task.configuredAdDurationMs = durationMs
+        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
+            task.playFullVideoBeforeJump = isFull
+            task.addCartMode = addCartMode
+        } else if (task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+            task.playFullVideoBeforeJump = isFull
+            task.addCartMode = addCartMode
+        }
+        requestScreenCapture(task, algorithm, enableRotation, waitingTasks)
     }
 
     private fun requestScreenCapture(task: com.androidclaw.app.task.TaskScript, algorithm: Int, enableRotation: Boolean, waitingTasks: List<com.androidclaw.app.task.VideoTask>) {

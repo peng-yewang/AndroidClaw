@@ -23,7 +23,8 @@ class DouyinVideoMatchTask : TaskScript {
     override val name = "抖音开屏视频匹配捕获"
     override val description = "循环关闭并打开抖音，利用视频匹配捕捉对应的开屏广告记录"
     override var configuredAdDurationMs: Long = 0L
-
+    var playFullVideoBeforeJump: Boolean = false // 是否等播放完再跳转落地页
+    var addCartMode: Int = 0 // 落地页交互模式 (0:无, 1:普通加购, 2:直播间小黄车)
     var targetVideoTasks: List<VideoTask> = emptyList()
     var recordResultCode: Int = 0
     var recordData: Intent? = null
@@ -31,6 +32,7 @@ class DouyinVideoMatchTask : TaskScript {
     var enableRotationMatch: Boolean = false
 
     private var recordStartWallMs = 0L
+    private var videoPlayStartTime = 0L // 精准记录视频在屏幕上起始播放的绝对时间
 
     private fun log(message: String, level: LogManager.Level = LogManager.Level.INFO) {
         LogManager.log("[DyTask] $message", level)
@@ -127,13 +129,38 @@ class DouyinVideoMatchTask : TaskScript {
                 killApp(engine, DOUYIN_PACKAGE)
                 engine.sleep(1000)
                 
-                // 2. 重新启动抖音
+                // 2. 🟢 [新增]：每一轮都扫码促活 (确保画像同步)
+                log("执行本轮扫码促活：先启动应用并等待稳定性...", LogManager.Level.INFO)
+                engine.launchApp(DOUYIN_PACKAGE)
+                engine.sleep(8000) 
+                applyQrCodeStrategy(engine)
+
+                // 2.1 扫码后必须强杀一次，以获得全新的开屏机会
+                log("扫码促活完成，强杀应用以触发冷启动开屏...", LogManager.Level.INFO)
+                killApp(engine, DOUYIN_PACKAGE)
+                engine.sleep(2000)
+
+                // 3. 🟢 [新增]：日历中转并标记裁切起点
+                log("正在启动系统日历 (同步刷新裁切开始时间)...", LogManager.Level.INFO)
+                if (!engine.launchApp("com.android.calendar")) {
+                    if (!engine.launchApp("com.huawei.calendar")) {
+                        engine.launchApp("com.hihonor.calendar")
+                    }
+                }
+                engine.sleep(2000) // 🌟 延迟 2 秒记录，确保日历 UI 完全稳定
+                val currentCalendarStartMs = System.currentTimeMillis() - recordStartWallMs
+                engine.sleep(3000) // 保持总停留 5s
+                
+                // 4. 重回桌面并启动抖音监测
+                log("环境准备完成，返回桌面重新启动抖音监测...", LogManager.Level.INFO)
+                engine.goHome()
+                engine.sleep(1500)
                 if (!engine.launchApp(DOUYIN_PACKAGE)) {
                     engine.sleep(2000)
                     continue
                 }
                 
-                // 3. 监控开屏并比对
+                // 5. 监控开屏并比对
                 val splashWaitStart = System.currentTimeMillis()
                 var loopHasHitTarget = false
                 
@@ -196,20 +223,88 @@ class DouyinVideoMatchTask : TaskScript {
                                 val idleTime = nowTimeForTimeout - lastMatch
                                 val matchDuration = lastMatch - start
 
-                                // 只有当超过 5 秒没有新的帧匹配上时，视为这个目标已脱离视线（播放结束或被跳过），此时统一做最终验证！
-                                if (idleTime >= 5000L) {
+                                // 🟢 模式A的跳转时间固定为 15秒 (15000L)。
+                                // configuredAdDurationMs 是整个广告配置的总时长，用于跳转回来后补足剩余录制时间。
+                                val jumpTimeModeA = 15000L 
+                                val elapsedSinceStart = nowTimeForTimeout - start
+                                
+                                // 提前1.5秒跳出匹配循环，以抵消后续操作的可能损耗
+                                val timeBuffer = 1500L
+                                val triggerByTimeout = !playFullVideoBeforeJump && elapsedSinceStart >= (jumpTimeModeA - timeBuffer)
+                                val triggerByDetachment = idleTime >= 5000L
+
+                                // 当已经播放了指定时长（模式A），或者超过 5 秒没有新的帧匹配上（被视为脱离视线），则开始执行最终验证与跳转逻辑
+                                if (triggerByTimeout || triggerByDetachment) {
                                     if (matchCount >= 4 && matchDuration >= 1000L) {
                                         val task = targetVideoTasks.find { it.id == videoId }
-                                        log("⭐ 初步命中目标广告！[task: ${task?.name}]，准备执行跳转及落地页追踪...", LogManager.Level.SUCCESS)
+                                        log("⭐ 初步命中目标开屏广告！[task: ${task?.name}]，执行分段逻辑机制...", LogManager.Level.SUCCESS)
                                         
-                                        // 🟢 [新功能]：点击跳转落地页并执行滑动交互
-                                        val interactionEndMs = jumpToLandingPageAndScroll(engine)
+                                        // 🟢 [精准控制]：设置起始视频播放锚点
+                                        videoPlayStartTime = currentAdStarts[videoId]!! + recordStartWallMs
                                         
-                                        log("⭐ 成功确认目标广告完整流程！(含落地页交互) [交互结束点: ${interactionEndMs}ms]", LogManager.Level.SUCCESS)
+                                        val now = System.currentTimeMillis()
+                                        val exactElapsed = now - videoPlayStartTime
+                                        
+                                        if (playFullVideoBeforeJump) {
+                                            // 方案 B: 播放完毕后再跳转
+                                            val expectedFullPlayTime = if (configuredAdDurationMs > 0) configuredAdDurationMs else 15000L
+                                            val waitTime = Math.max(0L, expectedFullPlayTime - exactElapsed)
+                                            log("模式 B: 精准等待开屏播放完毕 (已播: $exactElapsed ms, 补足: $waitTime ms)...", LogManager.Level.INFO)
+                                            engine.sleep(waitTime)
+                                            
+                                            // 1. 先点击“点击重播”
+                                            log("模式 B: 视频播放完毕，点击『点击重播』按钮 (679.0, 1827.0)...", LogManager.Level.INFO)
+                                            engine.clickAt(679f, 1827f)
+                                            engine.sleep(1000)
+                                            
+                                            // 2. 跳转落地页并滚动
+                                            val interactionEndMs = jumpToLandingPageAndScroll(engine)
+                                            
+                                            // 2. 🟢 返回抖音完成闭环
+                                            if (addCartMode == 2) {
+                                                log("模式 B [直播间]: 流程结束，执行『返回』动作并停留 5s...", LogManager.Level.INFO)
+                                                engine.goBack()
+                                                engine.sleep(5000)
+                                            } else {
+                                                log("模式 B: 落地页采集完成，唤回抖音执行『重播』动作...", LogManager.Level.INFO)
+                                                engine.launchApp(DOUYIN_PACKAGE)
+                                                engine.sleep(2000)
+                                                // log("点击『点击重播』按钮 (675.0, 1851.0)...", LogManager.Level.INFO)
+                                                // engine.clickAt(675f, 1851f)
+                                                engine.sleep(5000)
+                                            }
+                                            
+                                            val finalEndRelCount = System.currentTimeMillis() - recordStartWallMs
+                                            adIntervals.add(AdInterval(videoId, currentCalendarStartMs, finalEndRelCount))
+                                        } else {
+                                            // 方案 A: 严格物理播放 15s 后跳转
+                                            // 使用基于物理坐标的瞬秒点击，无需预留 UI 解析耗时
+                                            val preJumpWait = Math.max(0L, jumpTimeModeA - exactElapsed)
+                                            log("模式 A: 精准按 $jumpTimeModeA ms 执行跳转 (已播: $exactElapsed ms, 将再等: $preJumpWait ms)...", LogManager.Level.INFO)
+                                            engine.sleep(preJumpWait)
+                                            
+                                            // 1. 跳转落地页并滚动交互
+                                            jumpToLandingPageAndScroll(engine)
+
+                                            // 2. 🟢 返回抖音完成闭环
+                                            if (addCartMode == 2) {
+                                                log("模式 A [直播间]: 流程结束，执行『返回』动作并停留 5s...", LogManager.Level.INFO)
+                                                engine.goBack()
+                                                engine.sleep(6000)
+                                            } else {
+                                                val remainingWait = Math.max(0L, configuredAdDurationMs - jumpTimeModeA)
+                                                log("模式 A: 落地页采集完成，唤回抖音等待剩余播放时长 ($remainingWait ms)...", LogManager.Level.INFO)
+                                                engine.launchApp(DOUYIN_PACKAGE)
+                                                engine.sleep(remainingWait)
+                                            }
+                                            
+                                            val finalEndRelCount = System.currentTimeMillis() - recordStartWallMs
+                                            adIntervals.add(AdInterval(videoId, currentCalendarStartMs, finalEndRelCount))
+                                        }
+
+                                        log("⭐ 成功确认目标广告完整流程！(含最终闭环动作)", LogManager.Level.SUCCESS)
                                         LogManager.log("${LOG_PREFIX_VIDEO_STATUS}${videoId}|COMPLETED", LogManager.Level.INFO)
                                         
-                                        // ⚠️ 关键修正：裁剪的结束时间延展至交互完成的那一刻
-                                        adIntervals.add(AdInterval(videoId, start, if (interactionEndMs > 0) interactionEndMs else lastMatch))
                                         finishedTasks.add(videoId)
 
                                         // 🟢 [新功能]：清理后台所有任务（包含落地页及抖音）
@@ -384,66 +479,79 @@ class DouyinVideoMatchTask : TaskScript {
             engine.clickAt(132f, 481f)
         }
         
-        log("坐标点击指令已发射", LogManager.Level.SUCCESS)
+        log("坐标点击指令已发射，等待识别处理 (8s)...", LogManager.Level.SUCCESS)
+        engine.sleep(8000)
     }
 
     /**
      * 🟢 [新增]：点击跳转落地页并滑动到底部交互
      * 返回交互结束时的相对毫秒数 (用于精确裁剪)
      */
-    /**
-     * 🟢 [智能增强]：点击跳转落地页并滚动到底部交互
-     * 模仿 Playwright 的等待和滚动策略：
-     * 1. 监测 DOM 加载稳定性
-     * 2. 循环滑动直到页面内容不再变化
-     */
     private suspend fun jumpToLandingPageAndScroll(engine: AutomationEngine): Long {
-        log("1. 精准点击底部跳转落地页 (X: 0.5, Y: 0.9)...", LogManager.Level.INFO)
-        val size = engine.getScreenSize()
-        engine.clickAt(size.first / 2f, size.second * 0.90f)
+        log("1. 识别并点击入口跳转落地页...", LogManager.Level.INFO)
         
-        // 🟢 智能监测落地页容器加载 (模仿 DOMContentLoaded)
-        log("2. 正在监测落地页加载环境...", LogManager.Level.INFO)
-        val loadStartTime = System.currentTimeMillis()
-        var isContainerReady = false
-        while (System.currentTimeMillis() - loadStartTime < 8000) { // 最多等 8 秒
-            val nodes = com.androidclaw.app.engine.NodeFinder.findAll()
-            val hasWebView = nodes.any { it.className?.contains("WebView") == true }
-            val hasBrowserPkg = nodes.any { it.packageName?.contains("browser") == true || it.packageName?.contains("chrome") == true }
-            
-            if (hasWebView || hasBrowserPkg) {
-                log("检测到页面容器已就位，进入交互环境", LogManager.Level.SUCCESS)
-                isContainerReady = true
-                break
-            }
-            engine.sleep(500)
-        }
-        if (!isContainerReady) log("落地页环境加载较慢或非标准网页，执行预设交互", LogManager.Level.WARN)
+        // 🟢 [根据用户反馈更新]：不再使用耗时 1-2 秒的底层 UI 树遍历寻找“查看详情”文本，
+        // 而是直接使用经过用户测算的绝对物理坐标，实现 0 毫秒延迟的瞬发点击。
+        val targetX = 506f
+        val targetY = 2497f
+        log("执行瞬发物理坐标点击 ($targetX, $targetY) 跳转...", LogManager.Level.SUCCESS)
+        engine.clickAt(targetX, targetY)
+        
+        engine.sleep(20000)
 
-        // 🟢 动态循环滑动直至触底
-        log("3. 动态滑动探测触底...", LogManager.Level.INFO)
+        // 🟢 [新功能]：可选落地页“加购”动作
+        when (addCartMode) {
+            1 -> {
+                log("执行普通加购：点击『加入购物车』...", LogManager.Level.INFO)
+                engine.clickAt(678f, 2644f)
+                engine.sleep(3000)
+                log("执行普通加购：点击『X』关闭购物车...", LogManager.Level.INFO)
+                engine.clickAt(1259f, 511f)
+                engine.sleep(2000)
+            }
+            2 -> {
+                log("执行直播间交互：点击『左上角头像』(107, 227)...", LogManager.Level.INFO)
+                engine.clickAt(107f, 227f)
+                engine.sleep(3000)
+                log("执行直播间交互：点击『上方空白』关闭弹窗 (603, 950)...", LogManager.Level.INFO)
+                engine.clickAt(603f, 950f)
+                engine.sleep(2000)
+                log("执行直播间交互：点击『右下角小黄车』(755, 2677)...", LogManager.Level.INFO)
+                engine.clickAt(755f, 2677f)
+                engine.sleep(2000)
+            }
+        }
+
+        // 🟢 [智能增强]：动态循环滑动直至触底
         var lastPageFingerprint = ""
         var scrollAttempts = 0
         val rect = android.graphics.Rect()
-        
-        while (scrollAttempts < 10) { // 封顶 10 次，防止某些页面无限加载
-            engine.scrollDown(600)
-            engine.sleep(1200) // 等待滚动惯性和渲染
+
+        log("落地页已进入，开始动态触底探测...", LogManager.Level.INFO)
+        while (scrollAttempts < 20) { 
+            engine.scrollDown(400)
+            engine.sleep(1500)
             
-            // 获取底部若干节点的特征指纹
             val currentNodes = com.androidclaw.app.engine.NodeFinder.findAll()
+            // 提取底部若干节点的特征生成指纹 (包含 ID, 文本, 描述, 以及物理位置)
             val fingerprint = currentNodes.takeLast(5).joinToString("|") { node ->
                 node.getBoundsInScreen(rect)
-                "${node.text}-${node.contentDescription}-${rect.top}" 
+                "${node.viewIdResourceName}-${node.text}-${node.contentDescription}-${rect.top}" 
             }
             
-            if (fingerprint == lastPageFingerprint && lastPageFingerprint.isNotEmpty() && scrollAttempts > 3) {
-                log("连续两次内容特征一致，确认已到达页面最底部", LogManager.Level.SUCCESS)
+            if (fingerprint == lastPageFingerprint && lastPageFingerprint.isNotEmpty() && scrollAttempts >= 15) {
+                log("检测到页面内容不再变化，确认已到达最底部", LogManager.Level.SUCCESS)
                 break
             }
             lastPageFingerprint = fingerprint
             scrollAttempts++
-            log("滑动中... [Attempt: $scrollAttempts]", LogManager.Level.INFO)
+            log("滑动探测中... [当前层级: $scrollAttempts]", LogManager.Level.INFO)
+        }
+
+        if (addCartMode == 2) {
+            log("执行直播间交互：滑动结束，点击『上方空白』关闭商品列表 (660, 486)...", LogManager.Level.INFO)
+            engine.clickAt(660f, 486f)
+            engine.sleep(2000)
         }
         
         log("4. 交互操作完成，静止观察 3s...", LogManager.Level.INFO)
