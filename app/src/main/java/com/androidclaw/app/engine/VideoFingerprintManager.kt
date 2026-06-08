@@ -378,6 +378,13 @@ class VideoFingerprintManager {
         return java.lang.Long.bitCount(hash1 xor hash2)
     }
 
+    fun addFingerprint(videoId: String, hashes: List<Long>) {
+        if (hashes.isNotEmpty()) {
+            fingerprintGroups[videoId] = hashes
+            LogManager.log("ID: $videoId 外部注入 PHash 指纹成功, 共 ${hashes.size} 帧", LogManager.Level.SUCCESS)
+        }
+    }
+
     fun clear() {
         fingerprintGroups.clear()
     }

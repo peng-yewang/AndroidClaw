@@ -273,6 +273,17 @@ class MobileNetFingerprintManager(context: Context) {
         }
     }
 
+    fun addFingerprint(videoId: String, vectors: List<FloatArray>) {
+        if (vectors.isNotEmpty()) {
+            fingerprintGroups[videoId] = vectors
+            LogManager.log("AI：ID $videoId 外部注入语义向量成功, 共 ${vectors.size} 帧", LogManager.Level.SUCCESS)
+        }
+    }
+
+    fun extractSingleFrame(bitmap: Bitmap): FloatArray {
+        return runInference(bitmap)
+    }
+
     fun clear() {
         fingerprintGroups.clear()
     }

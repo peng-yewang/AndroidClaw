@@ -57,4 +57,8 @@ dependencies {
     // 🌟 TensorFlow Lite 核心
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
     implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    
+    // 📸 Google ML Kit OCR (中文)
+    implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.7.3")
 }

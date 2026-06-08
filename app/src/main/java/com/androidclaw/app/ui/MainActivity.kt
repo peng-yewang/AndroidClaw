@@ -60,12 +60,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 视频选择启动器
+    // 视频/媒体选择启动器
     private val videoPickerLauncher = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.GetContent()
     ) { uri: android.net.Uri? ->
         uri?.let {
-            val fileName = getFileName(it) ?: "未知视频.mp4"
+            val fileName = getFileName(it) ?: "未知媒体"
             val task = com.androidclaw.app.task.VideoTask(uri = it, name = fileName)
             viewModel.addVideoTask(task)
         }
@@ -205,9 +205,9 @@ class MainActivity : AppCompatActivity() {
             openAccessibilitySettings()
         }
 
-        // 添加视频
+        // 添加视频/图片
         binding.btnAddVideo.setOnClickListener {
-            videoPickerLauncher.launch("video/*")
+            videoPickerLauncher.launch("*/*")
         }
 
         // 开始任务
@@ -260,15 +260,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleTaskSelection(task: com.androidclaw.app.task.TaskScript) {
-        // 判断是否为需要“视频队列+算法匹配”类的重度任务
+        // 判断是否为需要“媒体队列+算法匹配”类的重度任务
         if (task is com.androidclaw.app.task.AdRecognitionTask || 
             task is com.androidclaw.app.task.DouyinVideoMatchTask ||
             task is com.androidclaw.app.task.TencentVideoMatchTask ||
-            task is com.androidclaw.app.task.DouyinFeedVideoMatchTask) {
+            task is com.androidclaw.app.task.DouyinFeedVideoMatchTask ||
+            task is com.androidclaw.app.task.WechatChannelsAdMatchTask ||
+            task is com.androidclaw.app.task.XiaohongshuAdMatchTask ||
+            task is com.androidclaw.app.task.WechatMomentsAdMatchTask) {
             
             val waitingTasks = viewModel.getWaitingVideoTasks()
             if (waitingTasks.isEmpty()) {
-                Toast.makeText(this, "请先添加目标视频到队列中", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "请先添加目标媒体到队列中", Toast.LENGTH_LONG).show()
                 return
             }
             
@@ -290,14 +293,18 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("第三步：开启横屏姿态旋转补偿？")
                     .setMessage("开启后，针对不规则比例广告会自动尝试二次旋转验核")
                     .setPositiveButton("开启") { _, _ ->
-                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask || task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask || 
+                            task is com.androidclaw.app.task.DouyinVideoMatchTask ||
+                            task is com.androidclaw.app.task.WechatChannelsAdMatchTask) {
                             showDouyinAdConfigFlow(task, algorithmIndex, true, waitingTasks)
                         } else {
                             requestScreenCapture(task, algorithmIndex, true, waitingTasks)
                         }
                     }
                     .setNegativeButton("不开启") { _, _ ->
-                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask || task is com.androidclaw.app.task.DouyinVideoMatchTask) {
+                        if (task is com.androidclaw.app.task.DouyinFeedVideoMatchTask || 
+                            task is com.androidclaw.app.task.DouyinVideoMatchTask ||
+                            task is com.androidclaw.app.task.WechatChannelsAdMatchTask) {
                             showDouyinAdConfigFlow(task, algorithmIndex, false, waitingTasks)
                         } else {
                             requestScreenCapture(task, algorithmIndex, false, waitingTasks)
@@ -357,6 +364,9 @@ class MainActivity : AppCompatActivity() {
         } else if (task is com.androidclaw.app.task.DouyinVideoMatchTask) {
             task.playFullVideoBeforeJump = isFull
             task.addCartMode = addCartMode
+        } else if (task is com.androidclaw.app.task.WechatChannelsAdMatchTask) {
+            task.playFullVideoBeforeJump = isFull
+            task.addCartMode = addCartMode
         }
         requestScreenCapture(task, algorithm, enableRotation, waitingTasks)
     }
@@ -380,6 +390,21 @@ class MainActivity : AppCompatActivity() {
                 task.enableRotationMatch = enableRotation
             }
             is com.androidclaw.app.task.DouyinFeedVideoMatchTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
+            is com.androidclaw.app.task.WechatChannelsAdMatchTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
+            is com.androidclaw.app.task.XiaohongshuAdMatchTask -> {
+                task.targetVideoTasks = waitingTasks
+                task.algorithmType = algorithm
+                task.enableRotationMatch = enableRotation
+            }
+            is com.androidclaw.app.task.WechatMomentsAdMatchTask -> {
                 task.targetVideoTasks = waitingTasks
                 task.algorithmType = algorithm
                 task.enableRotationMatch = enableRotation
