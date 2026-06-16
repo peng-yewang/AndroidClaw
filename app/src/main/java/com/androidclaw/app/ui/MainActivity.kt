@@ -110,6 +110,12 @@ class MainActivity : AppCompatActivity() {
         setupObservers()
         setupListeners()
 
+        // 读取并恢复云端模式开关状态
+        val prefs = getSharedPreferences("AndroidClawPrefs", android.content.Context.MODE_PRIVATE)
+        val isCloudMode = prefs.getBoolean("key_cloud_mode", false)
+        binding.switchCloudMode.isChecked = isCloudMode
+        toggleCloudMode(isCloudMode)
+
         // 注册日志监听
         LogManager.addListener(logListener)
 
@@ -200,6 +206,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupListeners() {
+        // 云端模式切换开关
+        binding.switchCloudMode.setOnCheckedChangeListener { _, isChecked ->
+            // 保存状态
+            getSharedPreferences("AndroidClawPrefs", android.content.Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean("key_cloud_mode", isChecked)
+                .apply()
+                
+            toggleCloudMode(isChecked)
+        }
+
         // 开启无障碍服务
         binding.btnEnableService.setOnClickListener {
             openAccessibilitySettings()
@@ -237,6 +254,24 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun toggleCloudMode(isCloud: Boolean) {
+        if (isCloud) {
+            // 开启云端模式
+            binding.cardTaskControl.visibility = android.view.View.GONE
+            binding.cardVideoQueue.visibility = android.view.View.GONE
+            binding.cardCloudStatus.visibility = android.view.View.VISIBLE
+            LogManager.log("已切换为云端自动调度模式，开始监听 API", LogManager.Level.INFO)
+            // TODO: 启动 API 轮询和调度器
+        } else {
+            // 恢复本地模式
+            binding.cardTaskControl.visibility = android.view.View.VISIBLE
+            binding.cardVideoQueue.visibility = android.view.View.VISIBLE
+            binding.cardCloudStatus.visibility = android.view.View.GONE
+            LogManager.log("已切换为本地测试模式", LogManager.Level.INFO)
+            // TODO: 停止 API 轮询
+        }
+    }
+
     private fun startNextVideoTask() {
         if (taskManager.state == TaskManager.TaskState.RUNNING) return
 
@@ -260,6 +295,42 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleTaskSelection(task: com.androidclaw.app.task.TaskScript) {
+        if (task is com.androidclaw.app.task.XiaohongshuQRMatchTask) {
+            val input = android.widget.EditText(this).apply {
+                hint = "请输入目标博主名称 (如: 女侠已退休)"
+            }
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("配置博主名称")
+                .setView(input)
+                .setPositiveButton("下一步") { _, _ ->
+                    task.targetBloggerName = input.text.toString().trim()
+                    
+                    val durationInput = android.widget.EditText(this).apply {
+                        inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                        hint = "单位：秒 (例如: 30)"
+                    }
+                    androidx.appcompat.app.AlertDialog.Builder(this)
+                        .setTitle("配置录制时长")
+                        .setView(durationInput)
+                        .setPositiveButton("开始") { _, _ ->
+                            val durationS = durationInput.text.toString().toLongOrNull() ?: 30L
+                            task.configuredAdDurationMs = durationS * 1000L
+                            
+                            pendingTask = task
+                            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_CODE_RECORD_AUDIO)
+                            } else {
+                                launchScreenCaptureRequest()
+                            }
+                        }
+                        .setNegativeButton("取消", null)
+                        .show()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+
         // 判断是否为需要“媒体队列+算法匹配”类的重度任务
         if (task is com.androidclaw.app.task.AdRecognitionTask || 
             task is com.androidclaw.app.task.DouyinVideoMatchTask ||

@@ -46,6 +46,7 @@ class TaskManager(private val context: Context) {
         registerTask(XiaohongshuAdMatchTask())
         registerTask(WechatMomentsAdMatchTask())
         registerTask(WechatElementVerifyTask())
+        registerTask(XiaohongshuQRMatchTask())
     }
 
     /**
@@ -85,7 +86,7 @@ class TaskManager(private val context: Context) {
 
         // 广告识别及特定匹配任务自行管理录屏，传递权限数据
         val isSelfManagedRecord = task is AdRecognitionTask || task is DouyinVideoMatchTask || task is TencentVideoMatchTask || task is DouyinFeedVideoMatchTask ||
-                task is WechatChannelsAdMatchTask || task is XiaohongshuAdMatchTask || task is WechatMomentsAdMatchTask
+                task is WechatChannelsAdMatchTask || task is XiaohongshuAdMatchTask || task is WechatMomentsAdMatchTask || task is XiaohongshuQRMatchTask
         if (isSelfManagedRecord && recordResultCode != null && recordData != null) {
             when (task) {
                 is AdRecognitionTask -> {
@@ -113,6 +114,10 @@ class TaskManager(private val context: Context) {
                     task.recordData = recordData
                 }
                 is WechatMomentsAdMatchTask -> {
+                    task.recordResultCode = recordResultCode
+                    task.recordData = recordData
+                }
+                is XiaohongshuQRMatchTask -> {
                     task.recordResultCode = recordResultCode
                     task.recordData = recordData
                 }
